@@ -103,6 +103,11 @@
         const createGameForm = document.getElementById('create-game-form');
         const cancelCreateGameBtn = document.getElementById('cancel-create-game-btn');
 
+        // AI Scanner Elements
+        const scanBoardButton = document.getElementById('scan-board-btn');
+        const fileInput = document.getElementById('upload-bingo-image');
+        const scanLoading = document.getElementById('scan-loading');
+
 
         // --- Utility Functions ---
 
@@ -178,6 +183,107 @@
                 return `<img src="${square.text}" alt="Bingo Item" class="w-full h-full object-cover">`;
             } else {
                 return `<span class="p-1 text-center">${square.text}</span>`;
+            }
+        }
+
+        // --- NEW AI/HELPER FUNCTIONS ---
+
+        /**
+         * Delays execution for a given number of milliseconds.
+         */
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        /**
+         * Fetches a URL with exponential backoff for retrying on 429 errors.
+         */
+        async function fetchWithBackoff(apiUrl, options, retries = 3, delayMs = 1000) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(apiUrl, options);
+                    if (response.ok) {
+                        return await response.json();
+                    }
+                    if (response.status === 429) { // Throttling
+                        console.warn(`API request throttled. Retrying in ${delayMs}ms...`);
+                        await delay(delayMs);
+                        delayMs *= 2; // Exponential backoff
+                        continue;
+                    }
+                    console.error(`API request failed with status ${response.status}:`, await response.text());
+                    return null; // Non-retryable error
+                } catch (error) {
+                    console.error("Fetch error:", error);
+                }
+            }
+            console.error("API request failed after all retries.");
+            return null;
+        }
+
+        /**
+         * Scans a bingo board image using the Gemini API and returns a structured list of squares.
+         */
+        async function scanBingoBoard(base64ImageData, mimeType) {
+            // NOTE: apiKey is an empty string. The environment will provide it.
+            const apiKey = ""; 
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: [
+                    {
+                        role: "user",
+                        parts: [
+                            { text: "Extract the text from the 25 squares of this bingo board. Provide the text for the 25 squares in order from left-to-right, top-to-bottom. The center square is often a 'FREE SPACE'. Respond with a JSON object containing a single key 'squares' which is an array of 25 strings. If a square is blank, use an empty string. The array must have exactly 25 elements." },
+                            {
+                                inlineData: {
+                                    mimeType: mimeType,
+                                    data: base64ImageData
+                                }
+                            }
+                        ]
+                    }
+                ],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "squares": {
+                                "type": "ARRAY",
+                                "items": { "type": "STRING" },
+                                "description": "An array of exactly 25 strings, representing the text in each square of the bingo board from left to right, top to bottom."
+                            }
+                        }
+                    }
+                }
+            };
+
+            const options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            };
+
+            const result = await fetchWithBackoff(apiUrl, options);
+
+            if (!result) {
+                throw new Error("API request failed or returned null.");
+            }
+
+            const part = result?.candidates?.[0]?.content?.parts?.[0];
+            if (part && part.text) {
+                const parsedJson = JSON.parse(part.text);
+                // Validate the response
+                if (parsedJson.squares && Array.isArray(parsedJson.squares) && parsedJson.squares.length === 25) {
+                    return parsedJson;
+                } else {
+                    console.error("Invalid JSON schema from AI:", parsedJson);
+                    throw new Error("AI response was not in the expected format (missing 'squares' array of 25).");
+                }
+            } else {
+                console.error("Invalid API response structure:", result);
+                throw new Error("Invalid or empty response from AI model.");
             }
         }
 
@@ -296,6 +402,59 @@
             return myBoard.every(square => square.text && square.text.trim() !== "");
         }
 
+        // --- AI Board Scanner Listeners ---
+        scanBoardButton.addEventListener('click', () => {
+            fileInput.click(); // Open file dialog
+        });
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Simple type check
+            if (!file.type.startsWith('image/')) {
+                showModalAlert("Please select an image file (png, jpg, etc).");
+                return;
+            }
+
+            scanLoading.classList.remove('hidden');
+            
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                const base64Full = event.target.result;
+                const mimeType = file.type;
+                const base64Data = base64Full.split(',')[1];
+                
+                try {
+                    const result = await scanBingoBoard(base64Data, mimeType);
+                    // Populate myBoard
+                    myBoard = result.squares.map((text, index) => ({
+                        text: text.trim() === '' ? (index === 12 ? 'FREE SPACE' : '') : text.trim(),
+                        marked: index === 12 // Mark free space
+                    }));
+                    
+                    // Ensure free space is correct
+                    myBoard[12] = { text: "FREE SPACE", marked: true };
+                    
+                    // Re-render
+                    renderBoardCreationGrid();
+                } catch (error) {
+                    console.error("Error scanning board:", error);
+                    showModalAlert("Sorry, I couldn't read that bingo board. Please try again or fill it out manually.");
+                } finally {
+                    scanLoading.classList.add('hidden');
+                    fileInput.value = null; // Reset file input
+                }
+            };
+            reader.onerror = () => {
+                console.error("Error reading file.");
+                showModalAlert("Could not read the selected file.");
+                scanLoading.classList.add('hidden');
+            };
+            reader.readAsDataURL(file);
+        });
+
+
         // --- Game Logic (Create & Join) ---
 
         // Show Modals
@@ -309,10 +468,8 @@
         cancelCreateGameBtn.addEventListener('click', () => createGameModal.classList.add('hidden'));
 
         joinGameButton.addEventListener('click', () => {
-             if (!isBoardComplete()) {
-                showModalAlert("Please fill out all 24 squares on your board before joining a game!");
-                return;
-            }
+             // MODIFICATION: Removed isBoardComplete() check.
+             // You can now join without a full board.
             joinGameModal.classList.remove('hidden');
         });
         cancelJoinGameBtn.addEventListener('click', () => joinGameModal.classList.add('hidden'));
@@ -395,20 +552,54 @@
 
                 const gameDoc = querySnapshot.docs[0];
                 currentGameId = gameDoc.id;
+                const gameData = gameDoc.data(); // Get game data
 
                 const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
                 const playerQuery = query(playersRef, where("userId", "==", currentUserId));
                 const playerQuerySnapshot = await getDocs(playerQuery);
 
                 if (playerQuerySnapshot.empty) {
-                    // New player, save their custom board
+                    // New player, create their board
+                    let playerBoardToSave;
+
+                    if (isBoardComplete()) {
+                        // User filled out their own board
+                        playerBoardToSave = myBoard;
+                        console.log("Saving player's custom board.");
+                    } else {
+                        // User did not fill out board, create one from host
+                        console.log("Generating randomized board from host's items.");
+                        if (!gameData.hostBoard || gameData.hostBoard.length !== 25) {
+                            showModalAlert("Error: Host board is invalid. Cannot join game.");
+                            setupBoardCreationView();
+                            return;
+                        }
+                        
+                        // Get host's items, filter out free space
+                        let hostItems = gameData.hostBoard.map(square => square.text)
+                                                            .filter(text => text !== "FREE SPACE");
+                        
+                        // Shuffle and create a new 24-item list
+                        let shuffledItems = shuffle([...hostItems]);
+                        
+                        // Re-insert FREE SPACE at index 12
+                        shuffledItems.splice(12, 0, "FREE SPACE");
+
+                        // Create the board object
+                        playerBoardToSave = shuffledItems.map((item, index) => ({
+                            text: item,
+                            marked: index === 12 // Pre-mark free space
+                        }));
+                    }
+
                     const playerDoc = await addDoc(playersRef, {
                         userId: currentUserId,
                         username: username,
                         isHost: false,
-                        board: myBoard // Save the player's custom board
+                        board: playerBoardToSave // Save the correct board
                     });
                     currentPlayerId = playerDoc.id;
+                    myBoard = playerBoardToSave; // Set global myBoard to what was saved
                 } else {
                     // Returning player
                     const playerDoc = playerQuerySnapshot.docs[0];
@@ -741,8 +932,17 @@
         <!-- Board Creation View -->
         <div id="board-creation-view" class="hidden space-y-6">
             <div class="bg-white p-6 rounded-lg shadow-lg">
-                <h2 class="text-2xl font-bold text-gray-800 mb-4">1. Create Your Board</h2>
-                <p class="text-gray-600 mb-4">Click any square (except the free space) to add your own text or image URL. You must fill all 24 squares before you can create or join a game.</p>
+                <div class="flex flex-wrap justify-between items-center mb-4 gap-2">
+                    <h2 class="text-2xl font-bold text-gray-800">1. Create Your Board</h2>
+                    <div class="flex flex-col items-end">
+                        <input type="file" id="upload-bingo-image" class="hidden" accept="image/*">
+                        <button id="scan-board-btn" class="bg-purple-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition-colors text-sm">
+                            Scan Board from Image
+                        </button>
+                        <p id="scan-loading" class="text-sm text-gray-500 hidden animate-pulse">Scanning, please wait...</p>
+                    </div>
+                </div>
+                <p class="text-gray-600 mb-4">Click any square to add text/images. Or, use the "Scan Board" button. You must fill all 24 squares to host. You can join a game with a blank board to get a random one.</p>
                 <div id="board-creation-grid" class="grid grid-cols-5 gap-2 border-4 border-gray-300 p-2 rounded-lg bg-gray-50">
                     <!-- Board creation grid generated here -->
                 </div>
@@ -893,7 +1093,5 @@
     </div>
 </body>
 </html>
-
-
 
 
