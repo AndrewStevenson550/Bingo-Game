@@ -50,31 +50,59 @@
         let gameListener = null; // Unsubscribe function for game snapshot
         let playersListener = null; // Unsubscribe function for players snapshot
         let myBoardListener = null; // Unsubscribe function for player's board snapshot
-        let myBoard = [];
+        
+        // --- NEW FLOW ---
+        // Initialize myBoard with 25 empty slots
+        let myBoard = Array(25).fill(null).map((_, i) => ({
+            text: i === 12 ? "FREE SPACE" : "", // Pre-fill free space
+            marked: i === 12 // Pre-mark free space
+        }));
+        let currentGameState = 'BOARD_CREATION'; // BOARD_CREATION, HOST_GAME, PLAYER_GAME
+        let selectedSquareIndex = -1;
 
         // --- DOM Elements ---
         const views = {
             loading: document.getElementById('loading-view'),
-            auth: document.getElementById('auth-view'),
-            createGame: document.getElementById('create-game-view'),
+            boardCreation: document.getElementById('board-creation-view'),
             host: document.getElementById('host-view'),
             player: document.getElementById('player-view')
         };
-        const createGameForm = document.getElementById('create-game-form');
-        const joinGameForm = document.getElementById('join-game-form');
+        
+        // Board Creation
+        const boardCreationGrid = document.getElementById('board-creation-grid');
+        const createGameButton = document.getElementById('create-game-btn');
+        const joinGameButton = document.getElementById('join-game-btn');
+
+        // Host
         const hostGameCode = document.getElementById('host-game-code');
-        const hostCallItemsGrid = document.getElementById('host-call-items-grid');
+        const hostBoardGrid = document.getElementById('host-board-grid');
         const hostPlayersList = document.getElementById('host-players-list');
+        const hostUserIdDisplay = document.getElementById('host-user-id');
+
+        // Player
         const playerBoardGrid = document.getElementById('player-board-grid');
         const playerCalledItemsList = document.getElementById('player-called-items-list');
         const bingoButton = document.getElementById('bingo-button');
+        const playerUserIdDisplay = document.getElementById('player-user-id');
+
+        // Modals
         const winModal = document.getElementById('win-modal');
         const winModalText = document.getElementById('win-modal-text');
         const newGameButton = document.getElementById('new-game-button');
-        const hostUserIdDisplay = document.getElementById('host-user-id');
-        const playerUserIdDisplay = document.getElementById('player-user-id');
-        const showCreateGameBtn = document.getElementById('show-create-game-btn');
+        
+        const editSquareModal = document.getElementById('edit-square-modal');
+        const editSquareForm = document.getElementById('edit-square-form');
+        const editSquareInput = document.getElementById('edit-square-input');
+        const cancelEditSquareBtn = document.getElementById('cancel-edit-square-btn');
+        
+        const joinGameModal = document.getElementById('join-game-modal');
+        const joinGameForm = document.getElementById('join-game-form');
+        const cancelJoinGameBtn = document.getElementById('cancel-join-game-btn');
+        
+        const createGameModal = document.getElementById('create-game-modal');
+        const createGameForm = document.getElementById('create-game-form');
         const cancelCreateGameBtn = document.getElementById('cancel-create-game-btn');
+
 
         // --- Utility Functions ---
 
@@ -122,8 +150,6 @@
          * @param {string} message - The message to display.
          */
         function showModalAlert(message) {
-            // In a real app, you'd build a proper modal. For simplicity, we use a basic alert.
-            // AVOIDING alert() as per instructions. We'll use the win-modal.
             winModalText.textContent = message;
             winModal.classList.remove('hidden');
             // Hide the 'new game' button for simple alerts
@@ -140,6 +166,21 @@
             }, 500); // Add a small delay
         }
 
+        /**
+         * Renders a square's content (text or image)
+         * @param {object} square - The square object {text, marked}
+         * @returns {string} HTML content for the square
+         */
+        function getSquareContent(square) {
+            if (square.text === "FREE SPACE") {
+                return `<span class="font-bold text-blue-700">FREE SPACE</span>`;
+            } else if (isImageUrl(square.text)) {
+                return `<img src="${square.text}" alt="Bingo Item" class="w-full h-full object-cover">`;
+            } else {
+                return `<span class="p-1 text-center">${square.text}</span>`;
+            }
+        }
+
         // --- Authentication ---
 
         /**
@@ -153,64 +194,142 @@
                 if (user) {
                     currentUserId = user.uid;
                     console.log("User signed in with UID:", currentUserId);
-                    showView('auth');
+                    // NEW FLOW: Go to board creation, not auth view
+                    setupBoardCreationView();
                 } else {
-                    // This block will run if the token is invalid or sign-in fails
                     console.log("No user signed in, attempting anonymous sign-in.");
                     try {
                         await signInAnonymously(auth);
-                        // The onAuthStateChanged listener will fire again with the new user
                     } catch (error) {
                         console.error("Anonymous sign-in failed:", error);
-                        showModalAlert("Could not connect to the game service. Please refresh.");
+                        showModalAlert("Could not connect. Please refresh.");
                     }
                 }
             });
 
             try {
-                // Use the globally provided token if it exists
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    console.log("Signing in with custom token.");
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
-                    // Fallback to anonymous sign-in if no token is provided
-                    console.log("No custom token, signing in anonymously.");
                     await signInAnonymously(auth);
                 }
             } catch (error) {
                 console.error("Error during initial sign-in:", error);
-                showModalAlert("Authentication failed. Please refresh the page.");
-                showView('auth'); // Show auth view even on fail, so they can retry
+                showModalAlert("Authentication failed. Please refresh.");
             }
         }
 
+        // --- Board Creation View ---
+
+        /**
+         * Sets up the initial board creation view
+         */
+        function setupBoardCreationView() {
+            currentGameState = 'BOARD_CREATION';
+            renderBoardCreationGrid();
+            showView('boardCreation');
+        }
+
+        /**
+         * Renders the user's board in the creation view
+         */
+        function renderBoardCreationGrid() {
+            boardCreationGrid.innerHTML = '';
+            myBoard.forEach((square, index) => {
+                const div = document.createElement('div');
+                let classes = "flex items-center justify-center border rounded-lg aspect-square text-xs sm:text-sm shadow-sm overflow-hidden break-words cursor-pointer hover:bg-gray-50";
+                
+                div.innerHTML = getSquareContent(square);
+
+                if (!square.text || (square.text === "FREE SPACE" && index !== 12)) {
+                    classes += " bg-gray-100";
+                    div.innerHTML = `<span class="text-gray-400 text-lg">+</span>`
+                } else if (square.text === "FREE SPACE") {
+                    classes += " bg-blue-100";
+                }
+
+                div.className = classes;
+                
+                // Allow editing any square *except* the free space
+                if (index !== 12) {
+                    div.addEventListener('click', () => showEditSquareModal(index));
+                }
+
+                boardCreationGrid.appendChild(div);
+            });
+        }
+
+        /**
+         * Shows the modal to edit a square
+         * @param {number} index - The board index (0-24) to edit
+         */
+        function showEditSquareModal(index) {
+            if (index === 12) return; // Cannot edit free space
+            selectedSquareIndex = index;
+            editSquareInput.value = myBoard[index].text;
+            editSquareModal.classList.remove('hidden');
+            editSquareInput.focus();
+        }
+
+        // Event listener for saving the edited square
+        editSquareForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const newText = editSquareInput.value.trim();
+            if (selectedSquareIndex > -1 && newText) {
+                myBoard[selectedSquareIndex].text = newText;
+                myBoard[selectedSquareIndex].marked = false; // Reset marked status
+            }
+            editSquareModal.classList.add('hidden');
+            selectedSquareIndex = -1;
+            renderBoardCreationGrid(); // Re-render the board
+        });
+
+        cancelEditSquareBtn.addEventListener('click', () => {
+            editSquareModal.classList.add('hidden');
+            selectedSquareIndex = -1;
+        });
+
+        /**
+         * Checks if the board is fully filled out (all 24 squares + free space)
+         */
+        function isBoardComplete() {
+            return myBoard.every(square => square.text && square.text.trim() !== "");
+        }
+
         // --- Game Logic (Create & Join) ---
+
+        // Show Modals
+        createGameButton.addEventListener('click', () => {
+            if (!isBoardComplete()) {
+                showModalAlert("Please fill out all 24 squares on your board before creating a game!");
+                return;
+            }
+            createGameModal.classList.remove('hidden');
+        });
+        cancelCreateGameBtn.addEventListener('click', () => createGameModal.classList.add('hidden'));
+
+        joinGameButton.addEventListener('click', () => {
+             if (!isBoardComplete()) {
+                showModalAlert("Please fill out all 24 squares on your board before joining a game!");
+                return;
+            }
+            joinGameModal.classList.remove('hidden');
+        });
+        cancelJoinGameBtn.addEventListener('click', () => joinGameModal.classList.add('hidden'));
+
 
         /**
          * Handles the "Create Game" form submission.
          */
         createGameForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            if (!currentUserId) {
-                showModalAlert("Not authenticated. Please wait.");
-                return;
-            }
+            if (!currentUserId) return showModalAlert("Not authenticated.");
 
             const formData = new FormData(createGameForm);
             const hostUsername = formData.get('host-username').trim();
-            const itemsInput = formData.get('bingo-items').trim();
-            const callItems = itemsInput.split(',').map(item => item.trim()).filter(Boolean);
+            if (!hostUsername) return showModalAlert("Please enter a username.");
 
-            if (callItems.length !== 25) {
-                showModalAlert("Please enter exactly 25 items, separated by commas.");
-                return;
-            }
-
-            if (!hostUsername) {
-                showModalAlert("Please enter a username.");
-                return;
-            }
-            
+            createGameModal.classList.add('hidden');
             showView('loading');
             currentUsername = hostUsername;
 
@@ -221,15 +340,14 @@
                 const gameDoc = await addDoc(gameRef, {
                     gameCode: gameCode,
                     hostId: currentUserId,
-                    callItems: callItems, // The 25 master items
-                    calledItems: [],  // Items called by the host
+                    hostBoard: myBoard, // Use the host's created board as the master list
+                    calledItems: [],
                     winner: null,
                     createdAt: serverTimestamp()
                 });
 
                 currentGameId = gameDoc.id;
 
-                // Add host as the first "player" (for the list, though they don't play)
                 const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
                 await addDoc(playersRef, {
                     userId: currentUserId,
@@ -238,12 +356,12 @@
                 });
 
                 console.log("Game created with ID:", currentGameId, "and Code:", gameCode);
-                setupHostView(gameCode, callItems);
+                setupHostView(gameCode);
 
             } catch (error) {
                 console.error("Error creating game:", error);
                 showModalAlert("Failed to create game. Please try again.");
-                showView('auth');
+                setupBoardCreationView(); // Go back to board creation
             }
         });
 
@@ -252,68 +370,50 @@
          */
         joinGameForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            if (!currentUserId) {
-                showModalAlert("Not authenticated. Please wait.");
-                return;
-            }
+            if (!currentUserId) return showModalAlert("Not authenticated.");
 
             const formData = new FormData(joinGameForm);
             const gameCode = formData.get('join-code').trim().toUpperCase();
             const username = formData.get('join-username').trim();
 
-            if (!gameCode || !username) {
-                showModalAlert("Please enter a game code and a username.");
-                return;
-            }
+            if (!gameCode || !username) return showModalAlert("Please enter a code and username.");
             
+            joinGameModal.classList.add('hidden');
             showView('loading');
             currentUsername = username;
 
             try {
-                // Find the game by its game code
                 const gamesRef = collection(db, `artifacts/${appId}/public/data/bingoGames`);
                 const q = query(gamesRef, where("gameCode", "==", gameCode));
                 const querySnapshot = await getDocs(q);
 
                 if (querySnapshot.empty) {
-                    showModalAlert("Game not found. Please check the code.");
-                    showView('auth');
+                    showModalAlert("Game not found.");
+                    showView('boardCreation');
                     return;
                 }
 
                 const gameDoc = querySnapshot.docs[0];
                 currentGameId = gameDoc.id;
-                const gameData = gameDoc.data();
 
-                // Check if player already joined
                 const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
                 const playerQuery = query(playersRef, where("userId", "==", currentUserId));
                 const playerQuerySnapshot = await getDocs(playerQuery);
 
                 if (playerQuerySnapshot.empty) {
-                    // New player, create their board
-                    let boardItems = shuffle([...gameData.callItems]);
-                    // Add "FREE SPACE" in the middle
-                    boardItems[12] = "FREE SPACE"; 
-                    
-                    const playerBoard = boardItems.map(item => ({
-                        text: item,
-                        marked: item === "FREE SPACE" // Pre-mark the free space
-                    }));
-
+                    // New player, save their custom board
                     const playerDoc = await addDoc(playersRef, {
                         userId: currentUserId,
                         username: username,
                         isHost: false,
-                        board: playerBoard
+                        board: myBoard // Save the player's custom board
                     });
                     currentPlayerId = playerDoc.id;
-                    myBoard = playerBoard;
                 } else {
                     // Returning player
                     const playerDoc = playerQuerySnapshot.docs[0];
                     currentPlayerId = playerDoc.id;
-                    myBoard = playerDoc.data().board;
+                    myBoard = playerDoc.data().board; // Load their board from server
                     console.log("Returning player, loaded board.");
                 }
 
@@ -322,67 +422,64 @@
             } catch (error) {
                 console.error("Error joining game:", error);
                 showModalAlert("Failed to join game. Please try again.");
-                showView('auth');
+                setupBoardCreationView();
             }
         });
 
         // --- Host View ---
 
         /**
-         * Sets up the Host view with game code, items, and listeners.
+         * Sets up the Host view.
          * @param {string} gameCode - The game code to display.
-         * @param {string[]} callItems - The array of 25 items.
          */
-        function setupHostView(gameCode, callItems) {
+        function setupHostView(gameCode) {
+            currentGameState = 'HOST_GAME';
             hostGameCode.textContent = gameCode;
             hostUserIdDisplay.textContent = `Your User ID: ${currentUserId}`;
             
-            // Render the call items grid
-            hostCallItemsGrid.innerHTML = '';
+            // Render the host's board as the call grid
+            hostBoardGrid.innerHTML = '';
             let calledItems = [];
 
-            callItems.forEach(item => {
+            myBoard.forEach((square, index) => {
                 const button = document.createElement('button');
-                button.dataset.item = item;
-                // Base classes, removing padding
-                button.className = "border rounded-lg bg-white shadow-sm hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 overflow-hidden";
+                button.dataset.item = square.text;
+                button.dataset.index = index;
+                button.className = "flex items-center justify-center border rounded-lg aspect-square text-xs sm:text-sm shadow-sm overflow-hidden break-words focus:outline-none focus:ring-2 focus:ring-blue-500";
+                
+                button.innerHTML = getSquareContent(square);
 
-                if (isImageUrl(item)) {
-                    button.innerHTML = `<img src="${item}" alt="Bingo Item" class="w-full h-full object-cover">`;
-                    button.classList.add("aspect-square"); // Make it square
+                if (square.text === "FREE SPACE") {
+                     button.className += " bg-blue-500 text-white font-bold opacity-100"; // Pre-mark free space
+                     button.disabled = true;
                 } else {
-                    button.textContent = item;
-                    button.classList.add("p-2", "break-words", "text-xs"); // Add padding and allow text wrap
+                     button.className += " bg-white hover:bg-blue-50 cursor-pointer";
                 }
                 
                 button.addEventListener('click', () => {
-                    if (!calledItems.includes(item)) {
-                        callItem(item);
+                    if (!calledItems.includes(square.text)) {
+                        callItem(square.text);
                     }
                 });
-                hostCallItemsGrid.appendChild(button);
+                hostBoardGrid.appendChild(button);
             });
 
             // Listen for game state changes (called items and winner)
             const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
             gameListener = onSnapshot(gameRef, (docSnap) => {
-                if (!docSnap.exists()) {
-                    showModalAlert("Game data error. Please refresh.");
-                    return;
-                }
+                if (!docSnap.exists()) return;
                 const gameData = docSnap.data();
                 calledItems = gameData.calledItems || [];
 
                 // Update called item button styles
-                hostCallItemsGrid.querySelectorAll('button').forEach(btn => {
-                    if (calledItems.includes(btn.dataset.item)) {
+                hostBoardGrid.querySelectorAll('button').forEach(btn => {
+                    if (calledItems.includes(btn.dataset.item) && btn.dataset.item !== "FREE SPACE") {
                         btn.classList.add('bg-gray-300', 'text-gray-500', 'line-through');
                         btn.classList.remove('bg-white', 'hover:bg-blue-50');
                         btn.disabled = true;
                     }
                 });
 
-                // Check for a winner
                 if (gameData.winner) {
                     showWinner(gameData.winner.username);
                 }
@@ -412,7 +509,7 @@
             try {
                 const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
                 await updateDoc(gameRef, {
-                    calledItems: arrayUnion(item) // Adds item to array if not present
+                    calledItems: arrayUnion(item)
                 });
             } catch (error) {
                 console.error("Error calling item:", error);
@@ -425,15 +522,14 @@
          * Sets up the Player view with board and listeners.
          */
         function setupPlayerView() {
+            currentGameState = 'PLAYER_GAME';
             playerUserIdDisplay.textContent = `Your User ID: ${currentUserId}`;
 
             // Listen for game state changes (called items and winner)
             const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
             gameListener = onSnapshot(gameRef, (docSnap) => {
-                if (!docSnap.exists()) {
-                    showModalAlert("Game data error. Please refresh.");
-                    return;
-                }
+                if (!docSnap.exists()) return showModalAlert("Game data error.");
+                
                 const gameData = docSnap.data();
                 const calledItems = gameData.calledItems || [];
 
@@ -448,10 +544,8 @@
                     }).join('')
                     : '<li class="text-gray-500">No items called yet...</li>';
 
-                // Re-render board to show which are "markable"
-                renderPlayerBoard(myBoard, calledItems);
+                renderPlayerBoard(calledItems);
 
-                // Check for a winner
                 if (gameData.winner) {
                     showWinner(gameData.winner.username);
                 }
@@ -463,11 +557,10 @@
                 if (docSnap.exists()) {
                     myBoard = docSnap.data().board;
                     // We need the calledItems list to render correctly
-                    const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
                     getDoc(gameRef).then(gameDoc => {
                         const calledItems = gameDoc.data().calledItems || [];
-                        renderPlayerBoard(myBoard, calledItems);
-                        checkBingo(myBoard); // Check for bingo every time board updates
+                        renderPlayerBoard(calledItems);
+                        checkBingo(); // Check for bingo every time board updates
                     });
                 }
             });
@@ -477,49 +570,29 @@
 
         /**
          * Renders the 5x5 player board.
-         * @param {Array} board - The player's board array.
          * @param {Array} calledItems - The list of called items.
          */
-        function renderPlayerBoard(board, calledItems) {
+        function renderPlayerBoard(calledItems) {
             playerBoardGrid.innerHTML = '';
-            board.forEach((square, index) => {
+            myBoard.forEach((square, index) => {
                 const div = document.createElement('div');
-                div.textContent = square.text;
                 div.dataset.index = index;
+                div.innerHTML = getSquareContent(square);
 
                 let classes = "flex items-center justify-center border rounded-lg aspect-square text-xs sm:text-sm shadow-sm overflow-hidden break-words";
                 
-                // Set content
-                if (square.text === "FREE SPACE") {
-                    div.textContent = "FREE SPACE";
-                    classes += " p-1 text-center font-bold text-blue-700";
-                } else if (isImageUrl(square.text)) {
-                    div.innerHTML = `<img src="${square.text}" alt="Bingo Item" class="w-full h-full object-cover">`;
-                    // No padding for images
-                } else {
-                    div.textContent = square.text;
-                    classes += " p-1 text-center";
-                }
-
                 // Set styling based on state
                 if (square.marked) {
-                    // Marked
                     classes += " bg-blue-500 text-white font-bold opacity-100";
-                    if(isImageUrl(square.text)) {
-                         classes += " ring-4 ring-blue-600 ring-inset"; // Add ring to marked images
-                    }
+                    if(isImageUrl(square.text)) classes += " ring-4 ring-blue-600 ring-inset";
                 } else if (calledItems.includes(square.text) || square.text === "FREE SPACE") {
                     // Markable (called or free space)
                     classes += " bg-white hover:bg-blue-100 cursor-pointer";
-                    if(isImageUrl(square.text)) {
-                        classes += " opacity-60 hover:opacity-100"; // Fade un-marked images
-                    }
+                    if(isImageUrl(square.text)) classes += " opacity-60 hover:opacity-100";
                 } else {
                     // Not markable
                     classes += " bg-gray-100 text-gray-400";
-                     if(isImageUrl(square.text)) {
-                        classes += " opacity-30"; // Fade un-called images
-                    }
+                     if(isImageUrl(square.text)) classes += " opacity-30";
                 }
                 div.className = classes;
 
@@ -536,41 +609,33 @@
          * @param {number} index - The index of the square to mark.
          */
         async function markSquare(index) {
-            if (myBoard[index].marked) return; // Already marked
-
+            if (myBoard[index].marked) return;
             myBoard[index].marked = true;
             
-            // Update in Firestore
             try {
                 const myBoardRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players/${currentPlayerId}`);
                 await updateDoc(myBoardRef, {
                     board: myBoard
                 });
-                // The onSnapshot listener will handle re-rendering and checking for bingo
             } catch (error) {
                 console.error("Error marking square:", error);
-                // Revert optimistic update
-                myBoard[index].marked = false;
+                myBoard[index].marked = false; // Revert
             }
         }
 
         /**
          * Checks the player's board for a winning line.
-         * @param {Array} board - The player's board array.
          */
-        function checkBingo(board) {
+        function checkBingo() {
             const lines = [
-                // Rows
                 [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
-                // Columns
                 [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
-                // Diagonals
                 [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
             ];
 
             let hasBingo = false;
             for (const line of lines) {
-                if (line.every(index => board[index].marked)) {
+                if (line.every(index => myBoard[index].marked)) {
                     hasBingo = true;
                     break;
                 }
@@ -588,21 +653,12 @@
          */
         bingoButton.addEventListener('click', async () => {
             try {
-                // Double-check bingo locally
-                checkBingo(myBoard);
-                if (bingoButton.classList.contains('hidden')) {
-                    showModalAlert("Wait, you don't have a bingo!");
-                    return;
-                }
+                checkBingo(); // Double-check
+                if (bingoButton.classList.contains('hidden')) return;
 
-                // Announce win to Firestore
                 const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
-                // Check if someone else won first
                 const gameSnap = await getDoc(gameRef);
-                if (gameSnap.data().winner) {
-                    showModalAlert("Someone just beat you to it!");
-                    return;
-                }
+                if (gameSnap.data().winner) return showModalAlert("Someone just beat you to it!");
 
                 await updateDoc(gameRef, {
                     winner: {
@@ -610,7 +666,6 @@
                         userId: currentUserId
                     }
                 });
-                // The onSnapshot listener will pick this up and show the win modal
             } catch (error) {
                 console.error("Error claiming bingo:", error);
             }
@@ -623,7 +678,6 @@
          * @param {string} username - The winner's username.
          */
         function showWinner(username) {
-            // Unsubscribe from listeners to prevent further updates
             if (gameListener) gameListener();
             if (playersListener) playersListener();
             if (myBoardListener) myBoardListener();
@@ -644,10 +698,6 @@
         // --- Start App ---
         initApp();
 
-        // --- View Navigation ---
-        showCreateGameBtn.addEventListener('click', () => showView('createGame'));
-        cancelCreateGameBtn.addEventListener('click', () => showView('auth'));
-
     </script>
 
     <style>
@@ -665,72 +715,42 @@
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
+
+    <!-- Top Navigation Bar -->
+    <nav class="bg-white shadow-md sticky top-0 z-30">
+        <div class="container mx-auto max-w-4xl p-4 flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-blue-600">Firebase Bingo</h1>
+            <div class="flex space-x-2">
+                <button id="create-game-btn" class="bg-emerald-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors text-sm">
+                    Create Game
+                </button>
+                <button id="join-game-btn" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors text-sm">
+                    Join Game
+                </button>
+            </div>
+        </div>
+    </nav>
+
     <div class="container mx-auto p-4 max-w-4xl">
 
-        <header class="text-center mb-6">
-            <h1 class="text-4xl font-bold text-blue-600">Firebase Bingo</h1>
-            <p class="text-lg text-gray-600">Create, Join, and Play!</p>
-        </header>
-
         <!-- Loading View -->
-        <div id="loading-view" class="text-center">
+        <div id="loading-view" class="text-center p-10">
             <p class="text-2xl font-semibold text-gray-700">Connecting...</p>
         </div>
 
-        <!-- Auth View -->
-        <div id="auth-view" class="hidden">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <!-- Join Game Card -->
-                <div class="bg-white p-6 rounded-lg shadow-lg">
-                    <h2 class="text-2xl font-bold mb-4 text-blue-700">Join a Game</h2>
-                    <form id="join-game-form">
-                        <div class="mb-4">
-                            <label for="join-code" class="block text-sm font-medium text-gray-700 mb-1">Game Code</label>
-                            <input type="text" id="join-code" name="join-code" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="ABC123" required>
-                        </div>
-                        <div class="mb-4">
-                            <label for="join-username" class="block text-sm font-medium text-gray-700 mb-1">Your Username</label>
-                            <input type="text" id="join-username" name="join-username" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Player1" required>
-                        </div>
-                        <button type="submit" class="w-full bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
-                            Join Game
-                        </button>
-                    </form>
-                </div>
-
-                <!-- Create Game Card -->
-                <div class="bg-white p-6 rounded-lg shadow-lg">
-                    <h2 class="text-2xl font-bold mb-4 text-emerald-700">Create a New Game</h2>
-                    <p class="text-gray-600 mb-4">Want to be the host? Click here to set up a new game board.</p>
-                    <button id="show-create-game-btn" class="w-full bg-emerald-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors">
-                        Create Game
-                    </button>
+        <!-- Board Creation View -->
+        <div id="board-creation-view" class="hidden space-y-6">
+            <div class="bg-white p-6 rounded-lg shadow-lg">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">1. Create Your Board</h2>
+                <p class="text-gray-600 mb-4">Click any square (except the free space) to add your own text or image URL. You must fill all 24 squares before you can create or join a game.</p>
+                <div id="board-creation-grid" class="grid grid-cols-5 gap-2 border-4 border-gray-300 p-2 rounded-lg bg-gray-50">
+                    <!-- Board creation grid generated here -->
                 </div>
             </div>
-        </div>
-        
-        <!-- Create Game View -->
-        <div id="create-game-view" class="hidden bg-white p-6 rounded-lg shadow-lg">
-            <h2 class="text-2xl font-bold mb-4 text-emerald-700">Create Your Bingo Board</h2>
-            <form id="create-game-form">
-                <div class="mb-4">
-                    <label for="host-username" class="block text-sm font-medium text-gray-700 mb-1">Your Username (Host)</label>
-                    <input type="text" id="host-username" name="host-username" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="BingoMaster" required>
-                </div>
-                <div class="mb-4">
-                    <label for="bingo-items" class="block text-sm font-medium text-gray-700 mb-1">Bingo Items (Enter 25, separated by commas)</label>
-                    <textarea id="bingo-items" name="bingo-items" rows="6" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., Team Meeting, 'Circle Back', Coffee Spill, ..."></textarea>
-                    <p class="text-xs text-gray-500 mt-1">Example: Item 1, Item 2, Item 3, ...</p>
-                </div>
-                <div class="flex gap-4">
-                    <button type="button" id="cancel-create-game-btn" class="w-1/2 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors">
-                        Cancel
-                    </button>
-                    <button type="submit" class="w-1/2 bg-emerald-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors">
-                        Start Game
-                    </button>
-                </div>
-            </form>
+            <div class="text-center">
+                 <h2 class="text-2xl font-bold text-gray-800 mb-4">2. Start Playing!</h2>
+                 <p class="text-gray-600 mb-4">Once your board is full, use the buttons at the top of the page to create or join a game.</p>
+            </div>
         </div>
 
         <!-- Host View -->
@@ -747,9 +767,9 @@
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <!-- Call Items Grid -->
                 <div class="md:col-span-2 bg-white p-6 rounded-lg shadow-lg">
-                    <h3 class="text-xl font-semibold mb-4">Call Items (Click to Call)</h3>
-                    <div id="host-call-items-grid" class="grid grid-cols-5 gap-2">
-                        <!-- Host items will be generated here -->
+                    <h3 class="text-xl font-semibold mb-4">Your Board (Click to Call Items)</h3>
+                    <div id="host-board-grid" class="grid grid-cols-5 gap-2">
+                        <!-- Host board will be generated here -->
                     </div>
                 </div>
                 <!-- Players List -->
@@ -785,6 +805,8 @@
             </div>
         </div>
 
+        <!-- === MODALS === -->
+
         <!-- Win Modal Overlay -->
         <div id="win-modal" class="dialog hidden" aria-modal="true">
             <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
@@ -798,9 +820,80 @@
             </div>
         </div>
 
+        <!-- Edit Square Modal -->
+        <div id="edit-square-modal" class="dialog hidden" aria-modal="true">
+            <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
+            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <form id="edit-square-form" class="relative w-full max-w-md p-6 bg-white rounded-lg shadow-2xl">
+                    <h2 class="text-xl font-bold text-gray-900 mb-4">Edit Square</h2>
+                    <div class="mb-4">
+                        <label for="edit-square-input" class="block text-sm font-medium text-gray-700 mb-1">Text or Image URL</label>
+                        <input type="text" id="edit-square-input" name="square-content" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 'Team Meeting' or 'http://...' " required>
+                    </div>
+                    <div class="flex gap-4">
+                        <button type="button" id="cancel-edit-square-btn" class="w-1/2 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors">
+                            Cancel
+                        </button>
+                        <button type="submit" class="w-1/2 bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
+                            Save
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Join Game Modal -->
+        <div id="join-game-modal" class="dialog hidden" aria-modal="true">
+            <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
+            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <form id="join-game-form" class="relative w-full max-w-md p-6 bg-white rounded-lg shadow-2xl">
+                    <h2 class="text-xl font-bold text-gray-900 mb-4">Join Game</h2>
+                    <div class="mb-4">
+                        <label for="join-code" class="block text-sm font-medium text-gray-700 mb-1">Game Code</label>
+                        <input type="text" id="join-code" name="join-code" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="ABC123" required>
+                    </div>
+                    <div class="mb-4">
+                        <label for="join-username" class="block text-sm font-medium text-gray-700 mb-1">Your Username</label>
+                        <input type="text" id="join-username" name="join-username" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Player1" required>
+                    </div>
+                    <div class="flex gap-4">
+                        <button type="button" id="cancel-join-game-btn" class="w-1/2 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors">
+                            Cancel
+                        </button>
+                        <button type="submit" class="w-1/2 bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
+                            Join
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Create Game Modal -->
+        <div id="create-game-modal" class="dialog hidden" aria-modal="true">
+            <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
+            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <form id="create-game-form" class="relative w-full max-w-md p-6 bg-white rounded-lg shadow-2xl">
+                    <h2 class="text-xl font-bold text-gray-900 mb-4">Create Game</h2>
+                    <div class="mb-4">
+                        <label for="host-username" class="block text-sm font-medium text-gray-700 mb-1">Your Host Username</label>
+                        <input type="text" id="host-username" name="host-username" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="BingoMaster" required>
+                    </div>
+                    <div class="flex gap-4">
+                        <button type="button" id="cancel-create-game-btn" class="w-1/2 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors">
+                            Cancel
+                        </button>
+                        <button type="submit" class="w-1/2 bg-emerald-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors">
+                            Create
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
     </div>
 </body>
 </html>
+
 
 
 
