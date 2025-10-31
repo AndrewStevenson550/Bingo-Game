@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase Bingo</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase JS SDKs -->
+    <script type="module">
+        // Ensure you have a __firebase_config variable available in your environment
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : {
+                // Fallback config now uses your provided values
+                apiKey: "AIzaSyAGksnY4y7xJ-6awhFY8PhYgNlpiO8fchQ",
+                authDomain: "bingo-97637.firebaseapp.com",
+                projectId: "bingo-97637",
+                storageBucket: "bingo-97637.firebasestorage.app",
+                messagingSenderId: "344260607387",
+                appId: "1:344260607387:web:9bfed1c6558851c69f353e",
+                measurementId: "G-XRJ75CMLMK"
+            };
+
+        // Import functions from the SDKs
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, 
+            onSnapshot, collection, query, where, getDocs, arrayUnion, serverTimestamp, setLogLevel 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // App ID (for Firestore rules)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-bingo-app';
+
+        // Global state
+        let currentUserId = null;
+        let currentGameId = null;
+        let currentPlayerId = null;
+        let currentUsername = null;
+        let gameListener = null; // Unsubscribe function for game snapshot
+        let playersListener = null; // Unsubscribe function for players snapshot
+        let myBoardListener = null; // Unsubscribe function for player's board snapshot
+        let myBoard = [];
+
+        // --- DOM Elements ---
+        const views = {
+            loading: document.getElementById('loading-view'),
+            auth: document.getElementById('auth-view'),
+            createGame: document.getElementById('create-game-view'),
+            host: document.getElementById('host-view'),
+            player: document.getElementById('player-view')
+        };
+        const createGameForm = document.getElementById('create-game-form');
+        const joinGameForm = document.getElementById('join-game-form');
+        const hostGameCode = document.getElementById('host-game-code');
+        const hostCallItemsGrid = document.getElementById('host-call-items-grid');
+        const hostPlayersList = document.getElementById('host-players-list');
+        const playerBoardGrid = document.getElementById('player-board-grid');
+        const playerCalledItemsList = document.getElementById('player-called-items-list');
+        const bingoButton = document.getElementById('bingo-button');
+        const winModal = document.getElementById('win-modal');
+        const winModalText = document.getElementById('win-modal-text');
+        const newGameButton = document.getElementById('new-game-button');
+        const hostUserIdDisplay = document.getElementById('host-user-id');
+        const playerUserIdDisplay = document.getElementById('player-user-id');
+
+        // --- Utility Functions ---
+
+        /**
+         * Shows a specific view and hides all others.
+         * @param {string} viewName - The key of the view to show (e.g., 'auth', 'host').
+         */
+        function showView(viewName) {
+            Object.values(views).forEach(view => view.classList.add('hidden'));
+            if (views[viewName]) {
+                views[viewName].classList.remove('hidden');
+            }
+        }
+
+        /**
+         * Generates a random 6-character alphanumeric code.
+         */
+        function generateGameCode() {
+            return Math.random().toString(36).substring(2, 8).toUpperCase();
+        }
+
+        /**
+         * Shuffles an array in place (Fisher-Yates shuffle).
+         */
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        /**
+         * Checks if a string is a URL pointing to an image.
+         * @param {string} url - The string to check.
+         */
+        function isImageUrl(url) {
+            if (typeof url !== 'string') return false;
+            // Simple check for image extensions
+            return url.startsWith('http') && (url.endsWith('.png') || url.endsWith('.jpg') || url.endsWith('.jpeg') || url.endsWith('.gif') || url.endsWith('.webp'));
+        }
+
+        /**
+         * Shows a custom modal alert.
+         * @param {string} message - The message to display.
+         */
+        function showModalAlert(message) {
+            // In a real app, you'd build a proper modal. For simplicity, we use a basic alert.
+            // AVOIDING alert() as per instructions. We'll use the win-modal.
+            winModalText.textContent = message;
+            winModal.classList.remove('hidden');
+            // Hide the 'new game' button for simple alerts
+            newGameButton.classList.add('hidden');
+            
+            // Add a temporary click listener to hide it
+            const closeAlertHandler = () => {
+                winModal.classList.add('hidden');
+                newGameButton.classList.remove('hidden'); // Reset button
+                winModal.removeEventListener('click', closeAlertHandler);
+            };
+            setTimeout(() => {
+                winModal.addEventListener('click', closeAlertHandler);
+            }, 500); // Add a small delay
+        }
+
+        // --- Authentication ---
+
+        /**
+         * Initializes the application, signs in the user, and sets up auth state listener.
+         */
+        async function initApp() {
+            setLogLevel('Debug');
+            showView('loading');
+
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    currentUserId = user.uid;
+                    console.log("User signed in with UID:", currentUserId);
+                    showView('auth');
+                } else {
+                    // This block will run if the token is invalid or sign-in fails
+                    console.log("No user signed in, attempting anonymous sign-in.");
+                    try {
+                        await signInAnonymously(auth);
+                        // The onAuthStateChanged listener will fire again with the new user
+                    } catch (error) {
+                        console.error("Anonymous sign-in failed:", error);
+                        showModalAlert("Could not connect to the game service. Please refresh.");
+                    }
+                }
+            });
+
+            try {
+                // Use the globally provided token if it exists
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    console.log("Signing in with custom token.");
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    // Fallback to anonymous sign-in if no token is provided
+                    console.log("No custom token, signing in anonymously.");
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Error during initial sign-in:", error);
+                showModalAlert("Authentication failed. Please refresh the page.");
+                showView('auth'); // Show auth view even on fail, so they can retry
+            }
+        }
+
+        // --- Game Logic (Create & Join) ---
+
+        /**
+         * Handles the "Create Game" form submission.
+         */
+        createGameForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentUserId) {
+                showModalAlert("Not authenticated. Please wait.");
+                return;
+            }
+
+            const formData = new FormData(createGameForm);
+            const hostUsername = formData.get('host-username').trim();
+            const itemsInput = formData.get('bingo-items').trim();
+            const callItems = itemsInput.split(',').map(item => item.trim()).filter(Boolean);
+
+            if (callItems.length !== 25) {
+                showModalAlert("Please enter exactly 25 items, separated by commas.");
+                return;
+            }
+
+            if (!hostUsername) {
+                showModalAlert("Please enter a username.");
+                return;
+            }
+            
+            showView('loading');
+            currentUsername = hostUsername;
+
+            try {
+                const gameCode = generateGameCode();
+                const gameRef = collection(db, `artifacts/${appId}/public/data/bingoGames`);
+                
+                const gameDoc = await addDoc(gameRef, {
+                    gameCode: gameCode,
+                    hostId: currentUserId,
+                    callItems: callItems, // The 25 master items
+                    calledItems: [],  // Items called by the host
+                    winner: null,
+                    createdAt: serverTimestamp()
+                });
+
+                currentGameId = gameDoc.id;
+
+                // Add host as the first "player" (for the list, though they don't play)
+                const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
+                await addDoc(playersRef, {
+                    userId: currentUserId,
+                    username: hostUsername,
+                    isHost: true
+                });
+
+                console.log("Game created with ID:", currentGameId, "and Code:", gameCode);
+                setupHostView(gameCode, callItems);
+
+            } catch (error) {
+                console.error("Error creating game:", error);
+                showModalAlert("Failed to create game. Please try again.");
+                showView('auth');
+            }
+        });
+
+        /**
+         * Handles the "Join Game" form submission.
+         */
+        joinGameForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentUserId) {
+                showModalAlert("Not authenticated. Please wait.");
+                return;
+            }
+
+            const formData = new FormData(joinGameForm);
+            const gameCode = formData.get('join-code').trim().toUpperCase();
+            const username = formData.get('join-username').trim();
+
+            if (!gameCode || !username) {
+                showModalAlert("Please enter a game code and a username.");
+                return;
+            }
+            
+            showView('loading');
+            currentUsername = username;
+
+            try {
+                // Find the game by its game code
+                const gamesRef = collection(db, `artifacts/${appId}/public/data/bingoGames`);
+                const q = query(gamesRef, where("gameCode", "==", gameCode));
+                const querySnapshot = await getDocs(q);
+
+                if (querySnapshot.empty) {
+                    showModalAlert("Game not found. Please check the code.");
+                    showView('auth');
+                    return;
+                }
+
+                const gameDoc = querySnapshot.docs[0];
+                currentGameId = gameDoc.id;
+                const gameData = gameDoc.data();
+
+                // Check if player already joined
+                const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
+                const playerQuery = query(playersRef, where("userId", "==", currentUserId));
+                const playerQuerySnapshot = await getDocs(playerQuery);
+
+                if (playerQuerySnapshot.empty) {
+                    // New player, create their board
+                    let boardItems = shuffle([...gameData.callItems]);
+                    // Add "FREE SPACE" in the middle
+                    boardItems[12] = "FREE SPACE"; 
+                    
+                    const playerBoard = boardItems.map(item => ({
+                        text: item,
+                        marked: item === "FREE SPACE" // Pre-mark the free space
+                    }));
+
+                    const playerDoc = await addDoc(playersRef, {
+                        userId: currentUserId,
+                        username: username,
+                        isHost: false,
+                        board: playerBoard
+                    });
+                    currentPlayerId = playerDoc.id;
+                    myBoard = playerBoard;
+                } else {
+                    // Returning player
+                    const playerDoc = playerQuerySnapshot.docs[0];
+                    currentPlayerId = playerDoc.id;
+                    myBoard = playerDoc.data().board;
+                    console.log("Returning player, loaded board.");
+                }
+
+                setupPlayerView();
+
+            } catch (error) {
+                console.error("Error joining game:", error);
+                showModalAlert("Failed to join game. Please try again.");
+                showView('auth');
+            }
+        });
+
+        // --- Host View ---
+
+        /**
+         * Sets up the Host view with game code, items, and listeners.
+         * @param {string} gameCode - The game code to display.
+         * @param {string[]} callItems - The array of 25 items.
+         */
+        function setupHostView(gameCode, callItems) {
+            hostGameCode.textContent = gameCode;
+            hostUserIdDisplay.textContent = `Your User ID: ${currentUserId}`;
+            
+            // Render the call items grid
+            hostCallItemsGrid.innerHTML = '';
+            let calledItems = [];
+
+            callItems.forEach(item => {
+                const button = document.createElement('button');
+                button.dataset.item = item;
+                // Base classes, removing padding
+                button.className = "border rounded-lg bg-white shadow-sm hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 overflow-hidden";
+
+                if (isImageUrl(item)) {
+                    button.innerHTML = `<img src="${item}" alt="Bingo Item" class="w-full h-full object-cover">`;
+                    button.classList.add("aspect-square"); // Make it square
+                } else {
+                    button.textContent = item;
+                    button.classList.add("p-2", "break-words", "text-xs"); // Add padding and allow text wrap
+                }
+                
+                button.addEventListener('click', () => {
+                    if (!calledItems.includes(item)) {
+                        callItem(item);
+                    }
+                });
+                hostCallItemsGrid.appendChild(button);
+            });
+
+            // Listen for game state changes (called items and winner)
+            const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
+            gameListener = onSnapshot(gameRef, (docSnap) => {
+                if (!docSnap.exists()) {
+                    showModalAlert("Game data error. Please refresh.");
+                    return;
+                }
+                const gameData = docSnap.data();
+                calledItems = gameData.calledItems || [];
+
+                // Update called item button styles
+                hostCallItemsGrid.querySelectorAll('button').forEach(btn => {
+                    if (calledItems.includes(btn.dataset.item)) {
+                        btn.classList.add('bg-gray-300', 'text-gray-500', 'line-through');
+                        btn.classList.remove('bg-white', 'hover:bg-blue-50');
+                        btn.disabled = true;
+                    }
+                });
+
+                // Check for a winner
+                if (gameData.winner) {
+                    showWinner(gameData.winner.username);
+                }
+            });
+
+            // Listen for players joining
+            const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
+            playersListener = onSnapshot(playersRef, (querySnapshot) => {
+                hostPlayersList.innerHTML = '';
+                querySnapshot.forEach((doc) => {
+                    const player = doc.data();
+                    const li = document.createElement('li');
+                    li.textContent = `${player.username} ${player.isHost ? '(Host)' : ''}`;
+                    li.className = "bg-gray-100 p-2 rounded";
+                    hostPlayersList.appendChild(li);
+                });
+            });
+            
+            showView('host');
+        }
+
+        /**
+         * Host calls an item, updating Firestore.
+         * @param {string} item - The item text to call.
+         */
+        async function callItem(item) {
+            try {
+                const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
+                await updateDoc(gameRef, {
+                    calledItems: arrayUnion(item) // Adds item to array if not present
+                });
+            } catch (error) {
+                console.error("Error calling item:", error);
+            }
+        }
+
+        // --- Player View ---
+
+        /**
+         * Sets up the Player view with board and listeners.
+         */
+        function setupPlayerView() {
+            playerUserIdDisplay.textContent = `Your User ID: ${currentUserId}`;
+
+            // Listen for game state changes (called items and winner)
+            const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
+            gameListener = onSnapshot(gameRef, (docSnap) => {
+                if (!docSnap.exists()) {
+                    showModalAlert("Game data error. Please refresh.");
+                    return;
+                }
+                const gameData = docSnap.data();
+                const calledItems = gameData.calledItems || [];
+
+                // Update the list of called items
+                playerCalledItemsList.innerHTML = calledItems.length > 0
+                    ? calledItems.map(item => {
+                        if (isImageUrl(item)) {
+                            return `<li class="w-10 h-10 rounded-full overflow-hidden border-2 border-gray-300 bg-gray-100 flex-shrink-0"><img src="${item}" alt="Called Item" class="w-full h-full object-cover"></li>`;
+                        } else {
+                            return `<li class="px-3 py-1 bg-gray-200 rounded-full text-sm flex-shrink-0">${item}</li>`;
+                        }
+                    }).join('')
+                    : '<li class="text-gray-500">No items called yet...</li>';
+
+                // Re-render board to show which are "markable"
+                renderPlayerBoard(myBoard, calledItems);
+
+                // Check for a winner
+                if (gameData.winner) {
+                    showWinner(gameData.winner.username);
+                }
+            });
+
+            // Listen for changes to *my* board (e.g., from another device)
+            const myBoardRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players/${currentPlayerId}`);
+            myBoardListener = onSnapshot(myBoardRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    myBoard = docSnap.data().board;
+                    // We need the calledItems list to render correctly
+                    const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
+                    getDoc(gameRef).then(gameDoc => {
+                        const calledItems = gameDoc.data().calledItems || [];
+                        renderPlayerBoard(myBoard, calledItems);
+                        checkBingo(myBoard); // Check for bingo every time board updates
+                    });
+                }
+            });
+
+            showView('player');
+        }
+
+        /**
+         * Renders the 5x5 player board.
+         * @param {Array} board - The player's board array.
+         * @param {Array} calledItems - The list of called items.
+         */
+        function renderPlayerBoard(board, calledItems) {
+            playerBoardGrid.innerHTML = '';
+            board.forEach((square, index) => {
+                const div = document.createElement('div');
+                div.textContent = square.text;
+                div.dataset.index = index;
+
+                let classes = "flex items-center justify-center border rounded-lg aspect-square text-xs sm:text-sm shadow-sm overflow-hidden break-words";
+                
+                // Set content
+                if (square.text === "FREE SPACE") {
+                    div.textContent = "FREE SPACE";
+                    classes += " p-1 text-center font-bold text-blue-700";
+                } else if (isImageUrl(square.text)) {
+                    div.innerHTML = `<img src="${square.text}" alt="Bingo Item" class="w-full h-full object-cover">`;
+                    // No padding for images
+                } else {
+                    div.textContent = square.text;
+                    classes += " p-1 text-center";
+                }
+
+                // Set styling based on state
+                if (square.marked) {
+                    // Marked
+                    classes += " bg-blue-500 text-white font-bold opacity-100";
+                    if(isImageUrl(square.text)) {
+                         classes += " ring-4 ring-blue-600 ring-inset"; // Add ring to marked images
+                    }
+                } else if (calledItems.includes(square.text) || square.text === "FREE SPACE") {
+                    // Markable (called or free space)
+                    classes += " bg-white hover:bg-blue-100 cursor-pointer";
+                    if(isImageUrl(square.text)) {
+                        classes += " opacity-60 hover:opacity-100"; // Fade un-marked images
+                    }
+                } else {
+                    // Not markable
+                    classes += " bg-gray-100 text-gray-400";
+                     if(isImageUrl(square.text)) {
+                        classes += " opacity-30"; // Fade un-called images
+                    }
+                }
+                div.className = classes;
+
+                if (!square.marked && (calledItems.includes(square.text) || square.text === "FREE SPACE")) {
+                    div.addEventListener('click', () => markSquare(index));
+                }
+
+                playerBoardGrid.appendChild(div);
+            });
+        }
+
+        /**
+         * Player marks a square on their board.
+         * @param {number} index - The index of the square to mark.
+         */
+        async function markSquare(index) {
+            if (myBoard[index].marked) return; // Already marked
+
+            myBoard[index].marked = true;
+            
+            // Update in Firestore
+            try {
+                const myBoardRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players/${currentPlayerId}`);
+                await updateDoc(myBoardRef, {
+                    board: myBoard
+                });
+                // The onSnapshot listener will handle re-rendering and checking for bingo
+            } catch (error) {
+                console.error("Error marking square:", error);
+                // Revert optimistic update
+                myBoard[index].marked = false;
+            }
+        }
+
+        /**
+         * Checks the player's board for a winning line.
+         * @param {Array} board - The player's board array.
+         */
+        function checkBingo(board) {
+            const lines = [
+                // Rows
+                [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
+                // Columns
+                [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
+                // Diagonals
+                [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
+            ];
+
+            let hasBingo = false;
+            for (const line of lines) {
+                if (line.every(index => board[index].marked)) {
+                    hasBingo = true;
+                    break;
+                }
+            }
+
+            if (hasBingo) {
+                bingoButton.classList.remove('hidden');
+            } else {
+                bingoButton.classList.add('hidden');
+            }
+        }
+
+        /**
+         * Player claims BINGO!
+         */
+        bingoButton.addEventListener('click', async () => {
+            try {
+                // Double-check bingo locally
+                checkBingo(myBoard);
+                if (bingoButton.classList.contains('hidden')) {
+                    showModalAlert("Wait, you don't have a bingo!");
+                    return;
+                }
+
+                // Announce win to Firestore
+                const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
+                // Check if someone else won first
+                const gameSnap = await getDoc(gameRef);
+                if (gameSnap.data().winner) {
+                    showModalAlert("Someone just beat you to it!");
+                    return;
+                }
+
+                await updateDoc(gameRef, {
+                    winner: {
+                        username: currentUsername,
+                        userId: currentUserId
+                    }
+                });
+                // The onSnapshot listener will pick this up and show the win modal
+            } catch (error) {
+                console.error("Error claiming bingo:", error);
+            }
+        });
+
+        // --- Win & Reset ---
+
+        /**
+         * Shows the full-screen winner modal.
+         * @param {string} username - The winner's username.
+         */
+        function showWinner(username) {
+            // Unsubscribe from listeners to prevent further updates
+            if (gameListener) gameListener();
+            if (playersListener) playersListener();
+            if (myBoardListener) myBoardListener();
+            gameListener = playersListener = myBoardListener = null;
+
+            winModalText.textContent = `${username} got a BINGO!`;
+            winModal.classList.remove('hidden');
+            winModal.classList.add('animate-flash');
+        }
+
+        /**
+         * Resets the game by reloading the page.
+         */
+        newGameButton.addEventListener('click', () => {
+            window.location.reload();
+        });
+
+        // --- Start App ---
+        initApp();
+
+    </script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Winner modal flashing animation */
+        @keyframes flash {
+            0%, 100% { background-color: rgba(16, 185, 129, 0.9); } /* emerald-500 */
+            50% { background-color: rgba(255, 255, 255, 0.9); }
+        }
+        .animate-flash {
+            animation: flash 1s infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto p-4 max-w-4xl">
+
+        <header class="text-center mb-6">
+            <h1 class="text-4xl font-bold text-blue-600">Firebase Bingo</h1>
+            <p class="text-lg text-gray-600">Create, Join, and Play!</p>
+        </header>
+
+        <!-- Loading View -->
+        <div id="loading-view" class="text-center">
+            <p class="text-2xl font-semibold text-gray-700">Connecting...</p>
+        </div>
+
+        <!-- Auth View -->
+        <div id="auth-view" class="hidden">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Join Game Card -->
+                <div class="bg-white p-6 rounded-lg shadow-lg">
+                    <h2 class="text-2xl font-bold mb-4 text-blue-700">Join a Game</h2>
+                    <form id="join-game-form">
+                        <div class="mb-4">
+                            <label for="join-code" class="block text-sm font-medium text-gray-700 mb-1">Game Code</label>
+                            <input type="text" id="join-code" name="join-code" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="ABC123" required>
+                        </div>
+                        <div class="mb-4">
+                            <label for="join-username" class="block text-sm font-medium text-gray-700 mb-1">Your Username</label>
+                            <input type="text" id="join-username" name="join-username" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Player1" required>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
+                            Join Game
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Create Game Card -->
+                <div class="bg-white p-6 rounded-lg shadow-lg">
+                    <h2 class="text-2xl font-bold mb-4 text-emerald-700">Create a New Game</h2>
+                    <p class="text-gray-600 mb-4">Want to be the host? Click here to set up a new game board.</p>
+                    <button onclick="showView('createGame')" class="w-full bg-emerald-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors">
+                        Create Game
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Create Game View -->
+        <div id="create-game-view" class="hidden bg-white p-6 rounded-lg shadow-lg">
+            <h2 class="text-2xl font-bold mb-4 text-emerald-700">Create Your Bingo Board</h2>
+            <form id="create-game-form">
+                <div class="mb-4">
+                    <label for="host-username" class="block text-sm font-medium text-gray-700 mb-1">Your Username (Host)</label>
+                    <input type="text" id="host-username" name="host-username" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="BingoMaster" required>
+                </div>
+                <div class="mb-4">
+                    <label for="bingo-items" class="block text-sm font-medium text-gray-700 mb-1">Bingo Items (Enter 25, separated by commas)</label>
+                    <textarea id="bingo-items" name="bingo-items" rows="6" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., Team Meeting, 'Circle Back', Coffee Spill, ..."></textarea>
+                    <p class="text-xs text-gray-500 mt-1">Example: Item 1, Item 2, Item 3, ...</p>
+                </div>
+                <div class="flex gap-4">
+                    <button type="button" onclick="showView('auth')" class="w-1/2 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors">
+                        Cancel
+                    </button>
+                    <button type="submit" class="w-1/2 bg-emerald-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors">
+                        Start Game
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Host View -->
+        <div id="host-view" class="hidden space-y-6">
+            <div class="bg-white p-6 rounded-lg shadow-lg text-center">
+                <h2 class="text-2xl font-bold text-gray-800">Your Game is Live!</h2>
+                <p class="text-lg text-gray-600 mt-2">Share this code with your players:</p>
+                <div class="my-4 p-4 bg-gray-100 border-dashed border-2 border-gray-300 rounded-lg">
+                    <span id="host-game-code" class="text-5xl font-bold text-blue-600 tracking-widest"></span>
+                </div>
+                <p id="host-user-id" class="text-xs text-gray-500"></p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Call Items Grid -->
+                <div class="md:col-span-2 bg-white p-6 rounded-lg shadow-lg">
+                    <h3 class="text-xl font-semibold mb-4">Call Items (Click to Call)</h3>
+                    <div id="host-call-items-grid" class="grid grid-cols-5 gap-2">
+                        <!-- Host items will be generated here -->
+                    </div>
+                </div>
+                <!-- Players List -->
+                <div class="md:col-span-1 bg-white p-6 rounded-lg shadow-lg">
+                    <h3 class="text-xl font-semibold mb-4">Players Joined</h3>
+                    <ul id="host-players-list" class="space-y-2">
+                        <!-- Player list will be generated here -->
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Player View -->
+        <div id="player-view" class="hidden space-y-6">
+            <div class="bg-white p-6 rounded-lg shadow-lg">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold text-gray-800">Your Bingo Board</h2>
+                    <button id="bingo-button" class="hidden bg-red-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg animate-pulse hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2">
+                        BINGO!
+                    </button>
+                </div>
+                <p id="player-user-id" class="text-xs text-gray-500 mb-4"></p>
+                <div id="player-board-grid" class="grid grid-cols-5 gap-2 border-4 border-blue-300 p-2 rounded-lg bg-blue-50">
+                    <!-- Player board will be generated here -->
+                </div>
+            </div>
+            
+            <div class="bg-white p-6 rounded-lg shadow-lg">
+                <h3 class="text-xl font-semibold mb-4">Called Items</h3>
+                <ul id="player-called-items-list" class="flex flex-wrap gap-2 items-center">
+                    <!-- Called items will be listed here -->
+                </ul>
+            </div>
+        </div>
+
+        <!-- Win Modal Overlay -->
+        <div id="win-modal" class="dialog hidden" aria-modal="true">
+            <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
+            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <div class="relative w-full max-w-md p-8 bg-white rounded-lg shadow-2xl text-center">
+                    <h2 id="win-modal-text" class="text-4xl font-bold text-gray-900 mb-6"></h2>
+                    <button id="new-game-button" class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
+                        Play Again
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>
+
+
+
