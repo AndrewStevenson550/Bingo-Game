@@ -1,1097 +1,1556 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Firebase Bingo</title>
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Inter Font -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Firebase JS SDKs -->
-    <script type="module">
-        // Ensure you have a __firebase_config variable available in your environment
-        const firebaseConfig = typeof __firebase_config !== 'undefined' 
-            ? JSON.parse(__firebase_config) 
-            : {
-                // Fallback config now uses your provided values
-                apiKey: "AIzaSyAGksnY4y7xJ-6awhFY8PhYgNlpiO8fchQ",
-                authDomain: "bingo-97637.firebaseapp.com",
-                projectId: "bingo-97637",
-                storageBucket: "bingo-97637.firebasestorage.app",
-                messagingSenderId: "344260607387",
-                appId: "1:344260607387:web:9bfed1c6558851c69f353e",
-                measurementId: "G-XRJ75CMLMK"
-            };
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CogniDeck</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Confetti CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  
+  <!-- NEW: PDF.js CDN (for client-side PDF parsing) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <script>
+    // Required by PDF.js
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js`;
+  </script>
+  
+  <!-- Custom Tailwind Config -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            inter: ['Inter', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+  
+  <!-- Google Font (Inter) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+  
+  <!-- Custom CSS for Flip Animation -->
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    /* Styles for 3D flip */
+    .perspective-1000 { perspective: 1000px; }
+    .transform-style-3d { transform-style: preserve-3d; }
+    .rotate-y-180 { transform: rotateY(180deg); }
+    .backface-hidden { backface-visibility: hidden; }
+    
+    /* Custom loader */
+    .loader {
+      border-top-color: transparent;
+    }
 
-        // Import functions from the SDKs
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { 
-            getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, 
-            onSnapshot, collection, query, where, getDocs, arrayUnion, serverTimestamp, setLogLevel 
-        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    /* Custom styles for quiz answer feedback */
+    .quiz-option.correct {
+      background-color: #dcfce7; /* green-100 */
+      border-color: #22c55e; /* green-500 */
+      color: #166534; /* green-800 */
+    }
+    .quiz-option.incorrect {
+      background-color: #fee2e2; /* red-100 */
+      border-color: #ef4444; /* red-500 */
+      color: #991b1b; /* red-800 */
+    }
+    .quiz-option:disabled {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
 
-        // Initialize Firebase
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
+  <!-- Main application root -->
+  <div id="app-root">
+    <!-- App content will be rendered here by JavaScript -->
+    <div class="flex items-center justify-center h-screen bg-white">
+      <div class="flex flex-col items-center">
+        <div class="w-16 h-16 border-4 border-blue-500 rounded-full animate-spin loader"></div>
+        <p class="mt-4 text-lg font-semibold text-gray-700">Loading CogniDeck...</p>
+      </div>
+    </div>
+  </div>
 
-        // App ID (for Firestore rules)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-bingo-app';
+  <!-- Firebase SDKs -->
+  <script type="module">
+    // --- FIREBASE IMPORTS ---
+    import { initializeApp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import {
+      getAuth,
+      signInWithEmailAndPassword,
+      createUserWithEmailAndPassword,
+      signOut,
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import {
+      getFirestore,
+      collection,
+      addDoc,
+      doc,
+      getDoc,
+      getDocs,
+      updateDoc,
+      deleteDoc,
+      query,
+      where,
+      onSnapshot,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    
+    // *** REMOVED FIREBASE FUNCTIONS IMPORT ***
 
-        // Global state
-        let currentUserId = null;
-        let currentGameId = null;
-        let currentPlayerId = null;
-        let currentUsername = null;
-        let gameListener = null; // Unsubscribe function for game snapshot
-        let playersListener = null; // Unsubscribe function for players snapshot
-        let myBoardListener = null; // Unsubscribe function for player's board snapshot
+    // --- FIREBASE CONFIG ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyDaTxyHz5dr4aWCE4tAiql4jJ4ImrrJKQM",
+      authDomain: "quizlet-type-app.firebaseapp.com",
+      projectId: "quizlet-type-app",
+      storageBucket: "quizlet-type-app.firebasestorage.app",
+      messagingSenderId: "829739254487",
+      appId: "1:829739254487:web:457ffc620af28c96f8a692"
+    };
+
+    // --- INITIALIZE FIREBASE ---
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    // *** REMOVED FUNCTIONS ***
+    setLogLevel('Debug');
+    
+    // --- NEW: GEMINI API KEY ---
+    // WARNING: This key is visible to anyone who views your website's source code.
+    const GEMINI_API_KEY = "AIzaSyDxNcI0uaa1C6z6mc09lINO7rLcNe2xyig";
+
+    // --- SVG ICONS (as string constants) ---
+    const IconHome = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" /></svg>`;
+    const IconSearch = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>`;
+    const IconUpload = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>`;
+    const IconPlus = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>`;
+    const IconLogout = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" /></svg>`;
+    const IconTrash = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12.502 0c.342.052.682.107 1.022.166m11.48 0c.342.052.682.107 1.022.166M4.772 5.79L4.772 5.79m14.456 0l-2.81-2.98m-11.48 0l2.81 2.98m0 0l-2.81 2.98m11.48 0l2.81 2.98" /></svg>`;
+    const IconEdit = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" /></svg>`;
+    const IconBack = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>`;
+    const IconFlip = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0 0v-4.992m0 0h-4.992" /></svg>`;
+    const IconNext = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" /></svg>`;
+    const IconPrev = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>`;
+    const IconPublic = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c.24 0 .477-.007.71-.021M12 21c-.24 0-.477-.007-.71-.021M12 15a3.75 3.75 0 003.75-3.75V8.25A3.75 3.75 0 0012 4.5v.001M12 15a3.75 3.75 0 01-3.75-3.75V8.25A3.75 3.75 0 0112 4.5v.001M12 15v.001M12 4.5v.001m0 0v.001m0 0h.001M12 15h.001M12 4.5h.001M12 3c-1.928 0-3.69.784-4.95 2.05S4.5 8.072 4.5 10v.75a8.217 8.217 0 004.22 7.029c.465.253.96.442 1.48.59M12 3c1.928 0 3.69.784 4.95 2.05S19.5 8.072 19.5 10v.75a8.217 8.217 0 01-4.22 7.029c-.465.253-.96.442-1.48.59M12 3v.001" /></svg>`;
+    const IconPrivate = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" /></svg>`;
+    const IconAI = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" class="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.898 20.562L16.25 21.75l-.648-1.188a2.25 2.25 0 00-1.579-1.579L12.75 18.25l1.188-.648a2.25 2.25 0 001.579-1.579L16.25 15l.648 1.188a2.25 2.25 0 001.579 1.579L19.75 18.25l-1.188.648a2.25 2.25 0 00-1.579 1.579z" /></svg>`;
+    // NEW: Quiz Icon
+    const IconQuiz = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>`;
+    
+    // --- GLOBAL STATE ---
+    let currentUser = null;
+    let currentPage = 'auth';
+    let currentSetId = null;
+    let currentUnsubscribe = null; // To stop real-time listeners
+
+    const appRoot = document.getElementById('app-root');
+
+    // --- NAVIGATION ---
+    function navigate(page, setId = null) {
+      if (currentUnsubscribe) {
+        currentUnsubscribe(); // Stop any active listeners
+        currentUnsubscribe = null;
+      }
+      currentPage = page;
+      currentSetId = setId;
+      render();
+    }
+
+    // --- SIGN OUT ---
+    async function handleSignOut() {
+      try {
+        await signOut(auth);
+        // Auth listener will handle navigation
+      } catch (error) {
+        console.error("Error signing out:", error);
+        // Use a simple custom modal or message for errors
+        showMessage("Error signing out: " + error.message);
+      }
+    }
+    
+    // --- UTILITIES ---
+    function showMessage(message, type = 'error') {
+      // This is a simple alert replacement.
+      // For a real app, you'd build a modal.
+      console.log(`[Message]: ${message} (Type: ${type})`);
+      alert(message); // Using alert as a placeholder for the requested modal
+    }
+
+    // --- RENDER FUNCTIONS ---
+    
+    /**
+     * Main render function that acts as a router
+     */
+    function render() {
+      // Clear the app root
+      appRoot.innerHTML = '';
+      
+      // Render Navbar (if logged in)
+      if (currentUser && currentPage !== 'auth') {
+        appRoot.innerHTML += NavbarHTML(currentUser, currentPage);
+      }
+      
+      // Render main page content
+      const mainContent = document.createElement('main');
+      mainContent.className = 'pt-16'; // Offset for fixed navbar
+      
+      // 1. Set the HTML
+      switch (currentPage) {
+        case 'auth':
+          mainContent.innerHTML = AuthPageHTML();
+          break;
+        case 'dashboard':
+          mainContent.innerHTML = DashboardHTML();
+          break;
+        case 'search':
+          mainContent.innerHTML = SearchPageHTML();
+          break;
+        case 'upload':
+          mainContent.innerHTML = UploadPageHTML();
+          break;
+        case 'create':
+          mainContent.innerHTML = SetEditorHTML();
+          break;
+        case 'edit':
+          mainContent.innerHTML = SetEditorHTML(currentSetId);
+          break;
+        case 'study':
+          mainContent.innerHTML = StudyPageHTML(); // This is just a loader
+          break;
+        // NEW: Quiz Case
+        case 'quiz':
+          mainContent.innerHTML = QuizPageHTML(); // This is just a loader
+          break;
+      }
+      
+      // 2. Append the HTML to the DOM
+      appRoot.appendChild(mainContent);
+      
+      // 3. Attach listeners *after* elements are in the DOM
+      if (currentUser && currentPage !== 'auth') {
+        attachNavbarListeners();
+      }
+
+      switch (currentPage) {
+        case 'auth':
+          attachAuthListeners(); // Now it's safe
+          break;
+        case 'dashboard':
+          fetchDashboardSets(); // This function finds elements and *then* fetches
+          break;
+        case 'search':
+          attachSearchListeners(); // Now it's safe
+          break;
+        case 'upload':
+          attachUploadListeners(); // Now it's safe
+          break;
+        case 'create':
+          attachSetEditorListeners(); // Now it's safe
+          break;
+        case 'edit':
+          attachSetEditorListeners(currentSetId); // Now it's safe
+          break;
+        case 'study':
+          fetchStudySet(); // This function finds elements and *then* fetches
+          break;
+        // NEW: Quiz Case
+        case 'quiz':
+          fetchQuizSet(); // This function finds elements and *then* fetches
+          break;
+      }
+    }
+
+    // --- NAVBAR ---
+    function NavbarHTML(user, page) {
+      const NavButton = (navPage, icon, label) => `
+        <button
+          data-page="${navPage}"
+          class="nav-button flex items-center space-x-2 px-3 py-2 rounded-md text-sm font-medium ${
+            page === navPage
+              ? 'bg-blue-600 text-white'
+              : 'text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+          }"
+        >
+          ${icon}
+          <span>${label}</span>
+        </button>
+      `;
+      
+      return `
+        <nav class="fixed top-0 left-0 right-0 bg-white shadow-md z-50">
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+              <div class="flex-shrink-0 flex items-center cursor-pointer" data-page="dashboard">
+                <span class="text-2xl font-bold text-blue-600">CogniDeck</span>
+              </div>
+              <div class="hidden md:flex md:items-center md:space-x-4">
+                ${NavButton('dashboard', IconHome, 'Home')}
+                ${NavButton('search', IconSearch, 'Search')}
+                ${NavButton('upload', IconUpload, 'Import')}
+                <button
+                  data-page="create"
+                  class="nav-button ml-4 flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+                >
+                  ${IconPlus}
+                  <span class="ml-2">Create Set</span>
+                </button>
+              </div>
+              <div class="hidden md:flex items-center space-x-3">
+                 <span class="text-sm text-gray-600 hidden lg:block">${user.email}</span>
+                 <button
+                  id="sign-out-button"
+                  class="p-2 rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                  title="Sign Out"
+                >
+                  ${IconLogout}
+                </button>
+              </div>
+              <!-- Mobile menu button (simplified) -->
+              <div class="md:hidden flex items-center">
+                <button id="mobile-menu-button" class="p-2 rounded-md text-gray-600">
+                  <svg class="block h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- Mobile Menu (hidden by default, JS can show it) -->
+        </nav>
+      `;
+    }
+    
+    function attachNavbarListeners() {
+      document.getElementById('sign-out-button').addEventListener('click', handleSignOut);
+      document.querySelectorAll('.nav-button').forEach(button => {
+        button.addEventListener('click', () => {
+          navigate(button.dataset.page);
+        });
+      });
+      document.querySelector('[data-page="dashboard"]').addEventListener('click', () => navigate('dashboard'));
+      // Add mobile menu logic here if needed
+    }
+    
+    // --- AUTH PAGE ---
+    function AuthPageHTML() {
+      return `
+        <div class="flex items-center justify-center min-h-screen -mt-16 bg-gray-100">
+          <div class="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-xl">
+            <h2 class="text-3xl font-bold text-center text-gray-900">
+              Welcome to <span class="text-blue-600">CogniDeck</span>
+            </h2>
+            <form class="space-y-6" id="auth-form">
+              <div>
+                <label for="email" class="block text-sm font-medium text-gray-700">Email address</label>
+                <input id="email" name="email" type="email" autocomplete="email" required class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
+              </div>
+              <div>
+                <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                <input id="password" name="password" type="password" autocomplete="current-password" required class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
+              </div>
+              <p id="auth-error" class="text-sm text-red-600"></p>
+              <button
+                type="submit"
+                id="auth-submit-button"
+                class="w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                Log In
+              </button>
+            </form>
+            <p class="text-sm text-center text-gray-600">
+              <span id="auth-toggle-text">Don't have an account?</span>
+              <button
+                id="auth-toggle-button"
+                class="ml-1 font-medium text-blue-600 hover:text-blue-500"
+              >
+                Sign Up
+              </button>
+            </p>
+          </div>
+        </div>
+      `;
+    }
+    
+    function attachAuthListeners() {
+      let isLogin = true;
+      const form = document.getElementById('auth-form');
+      if (!form) return; // Guard clause
+      
+      const emailEl = document.getElementById('email');
+      const passwordEl = document.getElementById('password');
+      const errorEl = document.getElementById('auth-error');
+      const submitButton = document.getElementById('auth-submit-button');
+      const toggleButton = document.getElementById('auth-toggle-button');
+      const toggleText = document.getElementById('auth-toggle-text');
+
+      toggleButton.addEventListener('click', () => {
+        isLogin = !isLogin;
+        submitButton.textContent = isLogin ? 'Log In' : 'Sign Up';
+        toggleText.textContent = isLogin ? "Don't have an account?" : 'Already have an account?';
+        toggleButton.textContent = isLogin ? 'Sign Up' : 'Log In';
+        errorEl.textContent = '';
+      });
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        submitButton.disabled = true;
+        submitButton.textContent = isLogin ? 'Logging in...' : 'Signing up...';
+        errorEl.textContent = '';
         
-        // --- NEW FLOW ---
-        // Initialize myBoard with 25 empty slots
-        let myBoard = Array(25).fill(null).map((_, i) => ({
-            text: i === 12 ? "FREE SPACE" : "", // Pre-fill free space
-            marked: i === 12 // Pre-mark free space
-        }));
-        let currentGameState = 'BOARD_CREATION'; // BOARD_CREATION, HOST_GAME, PLAYER_GAME
-        let selectedSquareIndex = -1;
+        try {
+          if (isLogin) {
+            await signInWithEmailAndPassword(auth, emailEl.value, passwordEl.value);
+          } else {
+            await createUserWithEmailAndPassword(auth, emailEl.value, passwordEl.value);
+          }
+          // Auth listener will handle navigation
+        } catch (err) {
+          errorEl.textContent = err.message;
+        } finally {
+          submitButton.disabled = false;
+          submitButton.textContent = isLogin ? 'Log In' : 'Sign Up';
+        }
+      });
+    }
 
-        // --- DOM Elements ---
-        const views = {
-            loading: document.getElementById('loading-view'),
-            boardCreation: document.getElementById('board-creation-view'),
-            host: document.getElementById('host-view'),
-            player: document.getElementById('player-view')
+    // --- DASHBOARD ---
+    function DashboardHTML() {
+      return `
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <h1 class="text-3xl font-bold text-gray-900 mb-6">Your Study Sets</h1>
+          <div id="dashboard-content">
+            <p>Loading your sets...</p>
+          </div>
+        </div>
+      `;
+    }
+    
+    function fetchDashboardSets() {
+      if (!currentUser) return;
+      
+      const contentEl = document.getElementById('dashboard-content');
+      const setsCollection = collection(db, "studySets");
+      const q = query(setsCollection, where("ownerId", "==", currentUser.uid));
+
+      currentUnsubscribe = onSnapshot(q, (querySnapshot) => {
+        if (querySnapshot.empty) {
+          contentEl.innerHTML = `
+            <div class="text-center p-12 bg-white rounded-lg shadow">
+              <h3 class="text-xl font-medium text-gray-800">No sets yet!</h3>
+              <p class="text-gray-600 mt-2 mb-4">Create a set manually or import a document to get started.</p>
+              <button
+                data-page="create"
+                class="nav-button inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+              >
+                ${IconPlus}
+                <span class="ml-2">Create New Set</span>
+              </button>
+            </div>
+          `;
+          // Re-attach listener since we overwrote the old button
+          contentEl.querySelector('.nav-button').addEventListener('click', () => navigate('create'));
+          return;
+        }
+        
+        let setsHTML = '<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">';
+        querySnapshot.forEach((doc) => {
+          setsHTML += SetCardHTML(doc.id, doc.data());
+        });
+        setsHTML += '</div>';
+        contentEl.innerHTML = setsHTML;
+        
+        // Attach listeners to all new cards
+        attachSetCardListeners();
+        
+      }, (err) => {
+        console.error("Error fetching sets:", err);
+        contentEl.innerHTML = `<p class="text-red-600">Failed to load your study sets. Please try again later.</p>`;
+      });
+    }
+    
+    function SetCardHTML(id, set, isPublicSearch = false) {
+      const cardCount = set.cards ? set.cards.length : 0;
+      const isOwner = currentUser && set.ownerId === currentUser.uid;
+      const canQuiz = cardCount >= 4;
+      
+      return `
+        <div 
+          class="set-card bg-white rounded-lg shadow-lg overflow-hidden transition-all duration-300 hover:shadow-xl cursor-pointer flex flex-col justify-between"
+          data-id="${id}"
+          data-action="${isPublicSearch ? 'study' : (isOwner ? 'edit' : 'study')}"
+        >
+          <div class="p-6">
+            <div class="flex justify-between items-start">
+              <h3 class="text-xl font-semibold text-gray-900 mb-2">${set.title}</h3>
+              ${set.isPublic ? `
+                <div class="flex items-center text-xs text-green-600 bg-green-100 px-2 py-1 rounded-full">
+                  ${IconPublic} <span class="ml-1">Public</span>
+                </div>` : 
+                (isOwner ? `
+                <div class="flex items-center text-xs text-red-600 bg-red-100 px-2 py-1 rounded-full">
+                  ${IconPrivate} <span class="ml-1">Private</span>
+                </div>` : '')
+              }
+            </div>
+            <p class="text-gray-600 text-sm mb-4 line-clamp-2">${set.description || "No description."}</p>
+            <p class="text-sm text-gray-500">${cardCount} ${cardCount === 1 ? 'card' : 'cards'}</p>
+            ${isPublicSearch && set.ownerEmail ? `<p class="text-sm text-gray-500 mt-1">By: ${set.ownerEmail}</p>` : ''}
+          </div>
+          
+          <div class="bg-gray-50 p-4 flex justify-end space-x-2">
+            ${!isPublicSearch && isOwner ? `
+              <button
+                class="set-card-button inline-flex items-center px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                data-action="edit"
+                data-id="${id}"
+              >
+                ${IconEdit} <span class="ml-2">Edit</span>
+              </button>` : ''
+            }
+            <button
+              class="set-card-button inline-flex items-center px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 ${!canQuiz ? 'opacity-50 cursor-not-allowed' : ''}"
+              data-action="quiz"
+              data-id="${id}"
+              data-count="${cardCount}"
+              title="${!canQuiz ? 'Needs at least 4 cards for a quiz' : 'Practice Quiz'}"
+            >
+              ${IconQuiz} <span class="ml-2">Quiz</span>
+            </button>
+            <button
+              class="set-card-button inline-flex items-center px-3 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 ${cardCount === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
+              data-action="study"
+              data-id="${id}"
+              data-count="${cardCount}"
+            >
+              Study
+            </button>
+          </div>
+        </div>
+      `;
+    }
+    
+    function attachSetCardListeners() {
+      document.querySelectorAll('.set-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+          // Don't trigger if a button inside was clicked
+          if (e.target.closest('button')) return;
+          
+          const action = card.dataset.action;
+          const id = card.dataset.id;
+          if (action === 'edit') {
+            navigate('edit', id);
+          } else {
+            navigate('study', id);
+          }
+        });
+      });
+      
+      document.querySelectorAll('.set-card-button').forEach(button => {
+        button.addEventListener('click', (e) => {
+          e.stopPropagation(); // Prevent card click
+          const action = button.dataset.action;
+          const id = button.dataset.id;
+          if (action === 'edit') {
+            navigate('edit', id);
+          } else if (action === 'quiz') {
+            if (button.dataset.count < 4) {
+              showMessage("You need at least 4 cards in a set to start a quiz.");
+            } else {
+              navigate('quiz', id);
+            }
+          } else if (action === 'study') {
+            if (button.dataset.count === "0") {
+              showMessage("This set has no cards! Add cards to study.");
+            } else {
+              navigate('study', id);
+            }
+          }
+        });
+      });
+    }
+    
+    // --- SET EDITOR ---
+    function SetEditorHTML(setId = null) {
+      return `
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <button data-page="dashboard" class="nav-button flex items-center text-blue-600 hover:underline mb-4">
+            ${IconBack} <span class="ml-1">Back to Dashboard</span>
+          </button>
+          
+          <form id="set-editor-form" class="bg-white p-6 md:p-8 rounded-lg shadow-xl">
+            <h1 class="text-3xl font-bold text-gray-900 mb-6">${setId ? 'Edit Study Set' : 'Create New Study Set'}</h1>
+            
+            <div id="form-content" class="space-y-6">
+              <!-- Loader -->
+              <p id="form-loader" class="${setId ? 'block' : 'hidden'}">Loading set details...</p>
+              
+              <!-- Content will be injected here by JS -->
+
+            </div>
+            
+            <p id="form-error" class="text-red-600 mt-4"></p>
+            
+            <!-- Action Buttons -->
+            <div class="flex items-center justify-between mt-8 border-t border-gray-200 pt-6">
+              <div>
+                ${setId ? `
+                  <button
+                    type="button"
+                    id="delete-set-button"
+                    class="text-sm font-medium text-red-600 hover:text-red-800"
+                  >
+                    Delete Set
+                  </button>` : ''
+                }
+              </div>
+              <button
+                type="submit"
+                id="form-submit-button"
+                disabled
+                class="px-6 py-2 text-base font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                ${setId ? 'Update Set' : 'Create Set'}
+              </button>
+            </div>
+          </form>
+          
+          <!-- Delete Confirmation Modal -->
+          <div id="delete-confirm-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+            <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+              <h3 class="text-lg font-medium text-gray-900">Delete Study Set?</h3>
+              <p class="mt-2 text-sm text-gray-600">Are you sure? This action cannot be undone.</p>
+              <div class="mt-6 flex justify-end space-x-3">
+                <button type="button" id="delete-cancel-button" class="px-4 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                <button type="button" id="delete-confirm-button" class="px-4 py-2 bg-red-600 border border-transparent rounded-md text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderSetEditorForm(data = { title: '', description: '', isPublic: false, cards: [{ term: '', definition: '' }] }) {
+      document.getElementById('form-loader').classList.add('hidden');
+      
+      let cardsHTML = '';
+      data.cards.forEach((card, index) => {
+        cardsHTML += `
+          <div class="card-entry grid grid-cols-1 md:grid-cols-2 gap-4 p-4 border border-gray-200 rounded-lg">
+            <div>
+              <label class="block text-xs font-medium text-gray-600">Term</label>
+              <input
+                type="text"
+                class="card-term w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Term"
+                value="${card.term.replace(/"/g, '&quot;')}"
+              />
+            </div>
+            <div class="flex">
+              <div class="flex-grow">
+                <label class="block text-xs font-medium text-gray-600">Definition</label>
+                <input
+                  type="text"
+                  class="card-definition w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Definition"
+                  value="${card.definition.replace(/"/g, '&quot;')}"
+                />
+              </div>
+              <button
+                type="button"
+                class="remove-card-button ml-2 mt-6 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full h-10 w-10 flex items-center justify-center"
+                title="Delete card"
+              >
+                ${IconTrash}
+              </button>
+            </div>
+          </div>
+        `;
+      });
+      
+      document.getElementById('form-content').innerHTML = `
+        <div>
+          <label for="title" class="block text-sm font-medium text-gray-700">Title</label>
+          <input
+            type="text"
+            id="title"
+            value="${data.title.replace(/"/g, '&quot;')}"
+            required
+            class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            placeholder="e.g. Biology - Chapter 1"
+          />
+        </div>
+        <div>
+          <label for="description" class="block text-sm font-medium text-gray-700">Description</label>
+          <textarea
+            id="description"
+            rows="3"
+            class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            placeholder="A quick summary of what this set covers"
+          >${data.description}</textarea>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="flex-grow flex flex-col">
+            <span class="text-sm font-medium text-gray-900">Visibility</span>
+            <span id="visibility-text" class="text-sm text-gray-500">${data.isPublic ? "Visible to everyone." : "Only visible to you."}</span>
+          </span>
+          <button
+            type="button"
+            id="visibility-toggle"
+            class="${data.isPublic ? 'bg-blue-600' : 'bg-gray-200'} relative inline-flex items-center h-6 rounded-full w-11 transition-colors"
+          >
+            <span class="sr-only">Toggle Visibility</span>
+            <span
+              class="${data.isPublic ? 'translate-x-6' : 'translate-x-1'} inline-block w-4 h-4 transform bg-white rounded-full transition-transform"
+            />
+          </button>
+        </div>
+        <div class="border-t border-gray-200 pt-6">
+          <h2 class="text-xl font-semibold text-gray-800 mb-4">Flashcards</h2>
+          <div id="cards-container" class="space-y-4">
+            ${cardsHTML}
+          </div>
+          <button
+            type="button"
+            id="add-card-button"
+            class="mt-4 inline-flex items-center px-4 py-2 border border-dashed border-gray-400 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+          >
+            ${IconPlus}
+            <span class="ml-2">Add Card</span>
+          </button>
+        </div>
+      `;
+      
+      document.getElementById('form-submit-button').disabled = false;
+    }
+    
+    function attachSetEditorListeners(setId = null) {
+      const form = document.getElementById('set-editor-form');
+      const errorEl = document.getElementById('form-error');
+      const submitButton = document.getElementById('form-submit-button');
+      const formContent = document.getElementById('form-content');
+      
+      let isPublic = false;
+      
+      // Add/Remove Card Listeners
+      formContent.addEventListener('click', e => {
+        if (e.target.closest('.add-card-button')) {
+          // This button ID is wrong, should be #add-card-button
+          // Fixed by using closest
+        }
+        if (e.target.closest('#add-card-button')) {
+          const container = document.getElementById('cards-container');
+          const cardCount = container.querySelectorAll('.card-entry').length;
+          container.insertAdjacentHTML('beforeend', `
+            <div class="card-entry grid grid-cols-1 md:grid-cols-2 gap-4 p-4 border border-gray-200 rounded-lg">
+              <div>
+                <label class="block text-xs font-medium text-gray-600">Term</label>
+                <input type="text" class="card-term w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm" placeholder="Term" value="" />
+              </div>
+              <div class="flex">
+                <div class="flex-grow">
+                  <label class="block text-xs font-medium text-gray-600">Definition</label>
+                  <input type="text" class="card-definition w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm" placeholder="Definition" value="" />
+                </div>
+                <button type="button" class="remove-card-button ml-2 mt-6 p-2 text-gray-400 hover:text-red-600 rounded-full h-10 w-10 flex items-center justify-center">${IconTrash}</button>
+              </div>
+            </div>
+          `);
+        }
+        
+        if (e.target.closest('.remove-card-button')) {
+          const cardEntries = document.querySelectorAll('.card-entry');
+          if (cardEntries.length <= 1) {
+            showMessage("You must have at least one card.");
+            return;
+          }
+          e.target.closest('.card-entry').remove();
+        }
+        
+        if (e.target.closest('#visibility-toggle')) {
+          isPublic = !isPublic;
+          const toggle = document.getElementById('visibility-toggle');
+          const text = document.getElementById('visibility-text');
+          const span = toggle.querySelector('span:last-child');
+          
+          toggle.classList.toggle('bg-blue-600', isPublic);
+          toggle.classList.toggle('bg-gray-200', !isPublic);
+          span.classList.toggle('translate-x-6', isPublic);
+          span.classList.toggle('translate-x-1', !isPublic);
+          text.textContent = isPublic ? "Visible to everyone." : "Only visible to you.";
+        }
+      });
+      
+      // Load data if editing
+      if (setId) {
+        getDoc(doc(db, "studySets", setId)).then(docSnap => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            if (data.ownerId !== currentUser.uid) {
+              errorEl.textContent = "You don't have permission to edit this set.";
+              return;
+            }
+            isPublic = data.isPublic;
+            renderSetEditorForm(data);
+          } else {
+            errorEl.textContent = "Study set not found.";
+          }
+        }).catch(err => {
+          console.error("Error fetching set:", err);
+          errorEl.textContent = "Failed to load study set.";
+        });
+      } else {
+        renderSetEditorForm(); // Render empty form
+      }
+      
+      // Form Submission
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        submitButton.disabled = true;
+        submitButton.textContent = "Saving...";
+        errorEl.textContent = '';
+        
+        const cards = [];
+        document.querySelectorAll('.card-entry').forEach(entry => {
+          const term = entry.querySelector('.card-term').value.trim();
+          const definition = entry.querySelector('.card-definition').value.trim();
+          if (term && definition) {
+            cards.push({ term, definition });
+          }
+        });
+        
+        if (cards.length === 0) {
+          errorEl.textContent = "You must have at least one valid card.";
+          submitButton.disabled = false;
+          submitButton.textContent = setId ? 'Update Set' : 'Create Set';
+          return;
+        }
+        
+        const setData = {
+          title: document.getElementById('title').value.trim(),
+          description: document.getElementById('description').value.trim(),
+          isPublic,
+          ownerId: currentUser.uid,
+          ownerEmail: currentUser.email,
+          cards: cards,
+          updatedAt: serverTimestamp(),
         };
         
-        // Board Creation
-        const boardCreationGrid = document.getElementById('board-creation-grid');
-        const createGameButton = document.getElementById('create-game-btn');
-        const joinGameButton = document.getElementById('join-game-btn');
-
-        // Host
-        const hostGameCode = document.getElementById('host-game-code');
-        const hostBoardGrid = document.getElementById('host-board-grid');
-        const hostPlayersList = document.getElementById('host-players-list');
-        const hostUserIdDisplay = document.getElementById('host-user-id');
-
-        // Player
-        const playerBoardGrid = document.getElementById('player-board-grid');
-        const playerCalledItemsList = document.getElementById('player-called-items-list');
-        const bingoButton = document.getElementById('bingo-button');
-        const playerUserIdDisplay = document.getElementById('player-user-id');
-
-        // Modals
-        const winModal = document.getElementById('win-modal');
-        const winModalText = document.getElementById('win-modal-text');
-        const newGameButton = document.getElementById('new-game-button');
+        try {
+          if (setId) {
+            await updateDoc(doc(db, "studySets", setId), setData);
+          } else {
+            setData.createdAt = serverTimestamp();
+            await addDoc(collection(db, "studySets"), setData);
+          }
+          navigate('dashboard');
+        } catch (err) {
+          console.error("Error saving set:", err);
+          errorEl.textContent = "Failed to save set: " + err.message;
+          submitButton.disabled = false;
+          submitButton.textContent = setId ? 'Update Set' : 'Create Set';
+        }
+      });
+      
+      // Delete Button Logic
+      if (setId) {
+        const modal = document.getElementById('delete-confirm-modal');
+        document.getElementById('delete-set-button').addEventListener('click', () => {
+          modal.classList.remove('hidden');
+        });
+        document.getElementById('delete-cancel-button').addEventListener('click', () => {
+          modal.classList.add('hidden');
+        });
+        document.getElementById('delete-confirm-button').addEventListener('click', async () => {
+          const deleteButton = document.getElementById('delete-confirm-button');
+          deleteButton.disabled = true;
+          deleteButton.textContent = "Deleting...";
+          try {
+            await deleteDoc(doc(db, "studySets", setId));
+            modal.classList.add('hidden');
+            navigate('dashboard');
+          } catch (err) {
+            console.error("Error deleting set:", err);
+            errorEl.textContent = "Failed to delete set: " + err.message;
+            deleteButton.disabled = false;
+            deleteButton.textContent = "Delete";
+          }
+        });
+      }
+    }
+    
+    // --- STUDY PAGE ---
+    function StudyPageHTML() {
+      // Just a loader, content will be filled by fetchStudySet
+      return `
+        <div id="study-page-container" class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <p>Loading study set...</p>
+        </div>
+      `;
+    }
+    
+    function fetchStudySet() {
+      const container = document.getElementById('study-page-container');
+      
+      getDoc(doc(db, "studySets", currentSetId)).then(docSnap => {
+        if (!docSnap.exists()) {
+          container.innerHTML = `<p class="text-red-600">Study set not found.</p>`;
+          return;
+        }
         
-        const editSquareModal = document.getElementById('edit-square-modal');
-        const editSquareForm = document.getElementById('edit-square-form');
-        const editSquareInput = document.getElementById('edit-square-input');
-        const cancelEditSquareBtn = document.getElementById('cancel-edit-square-btn');
+        const set = docSnap.data();
+        if (!set.cards || set.cards.length === 0) {
+            container.innerHTML = `<p class="text-red-600">This set has no cards to study.</p>`;
+            return;
+        }
         
-        const joinGameModal = document.getElementById('join-game-modal');
-        const joinGameForm = document.getElementById('join-game-form');
-        const cancelJoinGameBtn = document.getElementById('cancel-join-game-btn');
+        let currentIndex = 0;
+        let isFlipped = false;
+        let knownCards = new Set();
         
-        const createGameModal = document.getElementById('create-game-modal');
-        const createGameForm = document.getElementById('create-game-form');
-        const cancelCreateGameBtn = document.getElementById('cancel-create-game-btn');
+        function renderStudyUI() {
+          const currentCard = set.cards[currentIndex];
+          const isKnown = knownCards.has(currentCard.term);
+          const progressPercent = (knownCards.size / set.cards.length) * 100;
+          
+          container.innerHTML = `
+            <button data-page="dashboard" class="nav-button flex items-center text-blue-600 hover:underline mb-4">
+              ${IconBack} <span class="ml-1">Back to Dashboard</span>
+            </button>
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">${set.title}</h1>
+            <p class="text-lg text-gray-600 mb-6">${currentIndex + 1} / ${set.cards.length}</p>
 
-        // AI Scanner Elements
-        const scanBoardButton = document.getElementById('scan-board-btn');
-        const fileInput = document.getElementById('upload-bingo-image');
-        const scanLoading = document.getElementById('scan-loading');
-
-
-        // --- Utility Functions ---
-
-        /**
-         * Shows a specific view and hides all others.
-         * @param {string} viewName - The key of the view to show (e.g., 'auth', 'host').
-         */
-        function showView(viewName) {
-            Object.values(views).forEach(view => view.classList.add('hidden'));
-            if (views[viewName]) {
-                views[viewName].classList.remove('hidden');
-            }
-        }
-
-        /**
-         * Generates a random 6-character alphanumeric code.
-         */
-        function generateGameCode() {
-            return Math.random().toString(36).substring(2, 8).toUpperCase();
-        }
-
-        /**
-         * Shuffles an array in place (Fisher-Yates shuffle).
-         */
-        function shuffle(array) {
-            for (let i = array.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [array[i], array[j]] = [array[j], array[i]];
-            }
-            return array;
-        }
-
-        /**
-         * Checks if a string is a URL pointing to an image.
-         * @param {string} url - The string to check.
-         */
-        function isImageUrl(url) {
-            if (typeof url !== 'string') return false;
-            // Simple check for image extensions
-            return url.startsWith('http') && (url.endsWith('.png') || url.endsWith('.jpg') || url.endsWith('.jpeg') || url.endsWith('.gif') || url.endsWith('.webp'));
-        }
-
-        /**
-         * Shows a custom modal alert.
-         * @param {string} message - The message to display.
-         */
-        function showModalAlert(message) {
-            winModalText.textContent = message;
-            winModal.classList.remove('hidden');
-            // Hide the 'new game' button for simple alerts
-            newGameButton.classList.add('hidden');
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-6">
+              <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${progressPercent}%;"></div>
+            </div>
             
-            // Add a temporary click listener to hide it
-            const closeAlertHandler = () => {
-                winModal.classList.add('hidden');
-                newGameButton.classList.remove('hidden'); // Reset button
-                winModal.removeEventListener('click', closeAlertHandler);
-            };
-            setTimeout(() => {
-                winModal.addEventListener('click', closeAlertHandler);
-            }, 500); // Add a small delay
-        }
-
-        /**
-         * Renders a square's content (text or image)
-         * @param {object} square - The square object {text, marked}
-         * @returns {string} HTML content for the square
-         */
-        function getSquareContent(square) {
-            if (square.text === "FREE SPACE") {
-                return `<span class="font-bold text-blue-700">FREE SPACE</span>`;
-            } else if (isImageUrl(square.text)) {
-                return `<img src="${square.text}" alt="Bingo Item" class="w-full h-full object-cover">`;
-            } else {
-                return `<span class="p-1 text-center">${square.text}</span>`;
-            }
-        }
-
-        // --- NEW AI/HELPER FUNCTIONS ---
-
-        /**
-         * Delays execution for a given number of milliseconds.
-         */
-        function delay(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
-
-        /**
-         * Fetches a URL with exponential backoff for retrying on 429 errors.
-         */
-        async function fetchWithBackoff(apiUrl, options, retries = 3, delayMs = 1000) {
-            for (let i = 0; i < retries; i++) {
-                try {
-                    const response = await fetch(apiUrl, options);
-                    if (response.ok) {
-                        return await response.json();
-                    }
-                    if (response.status === 429) { // Throttling
-                        console.warn(`API request throttled. Retrying in ${delayMs}ms...`);
-                        await delay(delayMs);
-                        delayMs *= 2; // Exponential backoff
-                        continue;
-                    }
-                    console.error(`API request failed with status ${response.status}:`, await response.text());
-                    return null; // Non-retryable error
-                } catch (error) {
-                    console.error("Fetch error:", error);
-                }
-            }
-            console.error("API request failed after all retries.");
-            return null;
-        }
-
-        /**
-         * Scans a bingo board image using the Gemini API and returns a structured list of squares.
-         */
-        async function scanBingoBoard(base64ImageData, mimeType) {
-            // NOTE: apiKey is an empty string. The environment will provide it.
-            const apiKey = ""; 
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+            <div id="flashcard" class="w-full h-96 perspective-1000 mb-6 cursor-pointer">
+              <div 
+                class="relative w-full h-full transition-transform duration-500 transform-style-3d ${isFlipped ? 'rotate-y-180' : ''}"
+              >
+                <div class="absolute backface-hidden w-full h-full bg-white rounded-lg shadow-xl flex items-center justify-center p-6">
+                  <p class="text-3xl md:text-4xl font-semibold text-gray-900 text-center">${currentCard.term}</p>
+                </div>
+                <div class="absolute backface-hidden rotate-y-180 w-full h-full bg-white rounded-lg shadow-xl flex items-center justify-center p-6">
+                  <p class="text-2xl md:text-3xl font-medium text-gray-800 text-center">${currentCard.definition}</p>
+                </div>
+              </div>
+            </div>
             
-            const payload = {
-                contents: [
-                    {
-                        role: "user",
-                        parts: [
-                            { text: "Extract the text from the 25 squares of this bingo board. Provide the text for the 25 squares in order from left-to-right, top-to-bottom. The center square is often a 'FREE SPACE'. Respond with a JSON object containing a single key 'squares' which is an array of 25 strings. If a square is blank, use an empty string. The array must have exactly 25 elements." },
-                            {
-                                inlineData: {
-                                    mimeType: mimeType,
-                                    data: base64ImageData
-                                }
-                            }
-                        ]
-                    }
-                ],
-                generationConfig: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: "OBJECT",
-                        properties: {
-                            "squares": {
-                                "type": "ARRAY",
-                                "items": { "type": "STRING" },
-                                "description": "An array of exactly 25 strings, representing the text in each square of the bingo board from left to right, top to bottom."
-                            }
-                        }
-                    }
-                }
-            };
+            <div class="text-center text-gray-500 text-sm mb-6">Click card to flip</div>
 
-            const options = {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            };
-
-            const result = await fetchWithBackoff(apiUrl, options);
-
-            if (!result) {
-                throw new Error("API request failed or returned null.");
+            <div class="flex items-center justify-between mb-6">
+              <button id="prev-card" class="p-4 rounded-full bg-white shadow-md hover:bg-gray-100">${IconPrev}</button>
+              <button id="flip-card" class="flex items-center px-6 py-3 rounded-lg bg-white shadow-md font-medium text-gray-700 hover:bg-gray-100">${IconFlip} <span class="ml-2">Flip</span></button>
+              <button id="next-card" class="p-4 rounded-full bg-white shadow-md hover:bg-gray-100">${IconNext}</button>
+            </div>
+            
+            <button
+              id="known-toggle"
+              class="w-full py-4 rounded-lg font-bold text-lg transition-colors ${
+                isKnown
+                  ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                  : 'bg-green-100 text-green-700 hover:bg-green-200'
+              }"
+            >
+              ${isKnown ? 'Mark as Unknown' : 'Mark as Known'}
+            </button>
+          `;
+          
+          // Attach listeners for this view
+          document.getElementById('flashcard').addEventListener('click', flip);
+          document.getElementById('flip-card').addEventListener('click', flip);
+          document.getElementById('prev-card').addEventListener('click', prev);
+          document.getElementById('next-card').addEventListener('click', next);
+          document.getElementById('known-toggle').addEventListener('click', toggleKnown);
+          container.querySelector('.nav-button').addEventListener('click', () => navigate('dashboard'));
+        }
+        
+        function showCompletionModal() {
+            container.innerHTML = `
+              <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                <div class="bg-white p-8 rounded-lg shadow-xl max-w-md w-full text-center">
+                  <h3 class="text-2xl font-bold text-gray-900">Set Complete!</h3>
+                  <p class="mt-4 text-lg text-gray-600">You've marked all ${set.cards.length} cards as known.</p>
+                  <div class="mt-8 flex flex-col sm:flex-row justify-center gap-4">
+                    <button id="restart-button" class="px-6 py-3 bg-blue-600 border rounded-md text-base font-medium text-white hover:bg-blue-700">Study Again</button>
+                    <button id="dashboard-button" class="px-6 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50">Back to Dashboard</button>
+                  </div>
+                </div>
+              </div>
+            `;
+            
+            // NEW: Trigger confetti!
+            if (typeof confetti === 'function') {
+              confetti({
+                particleCount: 150,
+                spread: 100,
+                origin: { y: 0.6 }
+              });
             }
-
-            const part = result?.candidates?.[0]?.content?.parts?.[0];
-            if (part && part.text) {
-                const parsedJson = JSON.parse(part.text);
-                // Validate the response
-                if (parsedJson.squares && Array.isArray(parsedJson.squares) && parsedJson.squares.length === 25) {
-                    return parsedJson;
-                } else {
-                    console.error("Invalid JSON schema from AI:", parsedJson);
-                    throw new Error("AI response was not in the expected format (missing 'squares' array of 25).");
-                }
+            
+            document.getElementById('restart-button').addEventListener('click', () => {
+                currentIndex = 0;
+                isFlipped = false;
+                knownCards.clear();
+                renderStudyUI();
+            });
+            document.getElementById('dashboard-button').addEventListener('click', () => navigate('dashboard'));
+        }
+        
+        function flip() {
+          isFlipped = !isFlipped;
+          renderStudyUI(); // Just re-render
+        }
+        
+        function next() {
+          isFlipped = false;
+          setTimeout(() => {
+            if (currentIndex < set.cards.length - 1) {
+              currentIndex++;
             } else {
-                console.error("Invalid API response structure:", result);
-                throw new Error("Invalid or empty response from AI model.");
-            }
-        }
-
-        // --- Authentication ---
-
-        /**
-         * Initializes the application, signs in the user, and sets up auth state listener.
-         */
-        async function initApp() {
-            setLogLevel('Debug');
-            showView('loading');
-
-            onAuthStateChanged(auth, async (user) => {
-                if (user) {
-                    currentUserId = user.uid;
-                    console.log("User signed in with UID:", currentUserId);
-                    // NEW FLOW: Go to board creation, not auth view
-                    setupBoardCreationView();
-                } else {
-                    console.log("No user signed in, attempting anonymous sign-in.");
-                    try {
-                        await signInAnonymously(auth);
-                    } catch (error) {
-                        console.error("Anonymous sign-in failed:", error);
-                        showModalAlert("Could not connect. Please refresh.");
-                    }
-                }
-            });
-
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("Error during initial sign-in:", error);
-                showModalAlert("Authentication failed. Please refresh.");
-            }
-        }
-
-        // --- Board Creation View ---
-
-        /**
-         * Sets up the initial board creation view
-         */
-        function setupBoardCreationView() {
-            currentGameState = 'BOARD_CREATION';
-            renderBoardCreationGrid();
-            showView('boardCreation');
-        }
-
-        /**
-         * Renders the user's board in the creation view
-         */
-        function renderBoardCreationGrid() {
-            boardCreationGrid.innerHTML = '';
-            myBoard.forEach((square, index) => {
-                const div = document.createElement('div');
-                let classes = "flex items-center justify-center border rounded-lg aspect-square text-xs sm:text-sm shadow-sm overflow-hidden break-words cursor-pointer hover:bg-gray-50";
-                
-                div.innerHTML = getSquareContent(square);
-
-                if (!square.text || (square.text === "FREE SPACE" && index !== 12)) {
-                    classes += " bg-gray-100";
-                    div.innerHTML = `<span class="text-gray-400 text-lg">+</span>`
-                } else if (square.text === "FREE SPACE") {
-                    classes += " bg-blue-100";
-                }
-
-                div.className = classes;
-                
-                // Allow editing any square *except* the free space
-                if (index !== 12) {
-                    div.addEventListener('click', () => showEditSquareModal(index));
-                }
-
-                boardCreationGrid.appendChild(div);
-            });
-        }
-
-        /**
-         * Shows the modal to edit a square
-         * @param {number} index - The board index (0-24) to edit
-         */
-        function showEditSquareModal(index) {
-            if (index === 12) return; // Cannot edit free space
-            selectedSquareIndex = index;
-            editSquareInput.value = myBoard[index].text;
-            editSquareModal.classList.remove('hidden');
-            editSquareInput.focus();
-        }
-
-        // Event listener for saving the edited square
-        editSquareForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            const newText = editSquareInput.value.trim();
-            if (selectedSquareIndex > -1 && newText) {
-                myBoard[selectedSquareIndex].text = newText;
-                myBoard[selectedSquareIndex].marked = false; // Reset marked status
-            }
-            editSquareModal.classList.add('hidden');
-            selectedSquareIndex = -1;
-            renderBoardCreationGrid(); // Re-render the board
-        });
-
-        cancelEditSquareBtn.addEventListener('click', () => {
-            editSquareModal.classList.add('hidden');
-            selectedSquareIndex = -1;
-        });
-
-        /**
-         * Checks if the board is fully filled out (all 24 squares + free space)
-         */
-        function isBoardComplete() {
-            return myBoard.every(square => square.text && square.text.trim() !== "");
-        }
-
-        // --- AI Board Scanner Listeners ---
-        scanBoardButton.addEventListener('click', () => {
-            fileInput.click(); // Open file dialog
-        });
-
-        fileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            // Simple type check
-            if (!file.type.startsWith('image/')) {
-                showModalAlert("Please select an image file (png, jpg, etc).");
+              if (knownCards.size === set.cards.length) {
+                showCompletionModal();
                 return;
+              }
+              currentIndex = 0;
             }
-
-            scanLoading.classList.remove('hidden');
-            
-            const reader = new FileReader();
-            reader.onload = async (event) => {
-                const base64Full = event.target.result;
-                const mimeType = file.type;
-                const base64Data = base64Full.split(',')[1];
-                
-                try {
-                    const result = await scanBingoBoard(base64Data, mimeType);
-                    // Populate myBoard
-                    myBoard = result.squares.map((text, index) => ({
-                        text: text.trim() === '' ? (index === 12 ? 'FREE SPACE' : '') : text.trim(),
-                        marked: index === 12 // Mark free space
-                    }));
-                    
-                    // Ensure free space is correct
-                    myBoard[12] = { text: "FREE SPACE", marked: true };
-                    
-                    // Re-render
-                    renderBoardCreationGrid();
-                } catch (error) {
-                    console.error("Error scanning board:", error);
-                    showModalAlert("Sorry, I couldn't read that bingo board. Please try again or fill it out manually.");
-                } finally {
-                    scanLoading.classList.add('hidden');
-                    fileInput.value = null; // Reset file input
-                }
-            };
-            reader.onerror = () => {
-                console.error("Error reading file.");
-                showModalAlert("Could not read the selected file.");
-                scanLoading.classList.add('hidden');
-            };
-            reader.readAsDataURL(file);
-        });
-
-
-        // --- Game Logic (Create & Join) ---
-
-        // Show Modals
-        createGameButton.addEventListener('click', () => {
-            if (!isBoardComplete()) {
-                showModalAlert("Please fill out all 24 squares on your board before creating a game!");
-                return;
-            }
-            createGameModal.classList.remove('hidden');
-        });
-        cancelCreateGameBtn.addEventListener('click', () => createGameModal.classList.add('hidden'));
-
-        joinGameButton.addEventListener('click', () => {
-             // MODIFICATION: Removed isBoardComplete() check.
-             // You can now join without a full board.
-            joinGameModal.classList.remove('hidden');
-        });
-        cancelJoinGameBtn.addEventListener('click', () => joinGameModal.classList.add('hidden'));
-
-
-        /**
-         * Handles the "Create Game" form submission.
-         */
-        createGameForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            if (!currentUserId) return showModalAlert("Not authenticated.");
-
-            const formData = new FormData(createGameForm);
-            const hostUsername = formData.get('host-username').trim();
-            if (!hostUsername) return showModalAlert("Please enter a username.");
-
-            createGameModal.classList.add('hidden');
-            showView('loading');
-            currentUsername = hostUsername;
-
-            try {
-                const gameCode = generateGameCode();
-                const gameRef = collection(db, `artifacts/${appId}/public/data/bingoGames`);
-                
-                const gameDoc = await addDoc(gameRef, {
-                    gameCode: gameCode,
-                    hostId: currentUserId,
-                    hostBoard: myBoard, // Use the host's created board as the master list
-                    calledItems: [],
-                    winner: null,
-                    createdAt: serverTimestamp()
-                });
-
-                currentGameId = gameDoc.id;
-
-                const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
-                await addDoc(playersRef, {
-                    userId: currentUserId,
-                    username: hostUsername,
-                    isHost: true
-                });
-
-                console.log("Game created with ID:", currentGameId, "and Code:", gameCode);
-                setupHostView(gameCode);
-
-            } catch (error) {
-                console.error("Error creating game:", error);
-                showModalAlert("Failed to create game. Please try again.");
-                setupBoardCreationView(); // Go back to board creation
-            }
-        });
-
-        /**
-         * Handles the "Join Game" form submission.
-         */
-        joinGameForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            if (!currentUserId) return showModalAlert("Not authenticated.");
-
-            const formData = new FormData(joinGameForm);
-            const gameCode = formData.get('join-code').trim().toUpperCase();
-            const username = formData.get('join-username').trim();
-
-            if (!gameCode || !username) return showModalAlert("Please enter a code and username.");
-            
-            joinGameModal.classList.add('hidden');
-            showView('loading');
-            currentUsername = username;
-
-            try {
-                const gamesRef = collection(db, `artifacts/${appId}/public/data/bingoGames`);
-                const q = query(gamesRef, where("gameCode", "==", gameCode));
-                const querySnapshot = await getDocs(q);
-
-                if (querySnapshot.empty) {
-                    showModalAlert("Game not found.");
-                    showView('boardCreation');
-                    return;
-                }
-
-                const gameDoc = querySnapshot.docs[0];
-                currentGameId = gameDoc.id;
-                const gameData = gameDoc.data(); // Get game data
-
-                const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
-                const playerQuery = query(playersRef, where("userId", "==", currentUserId));
-                const playerQuerySnapshot = await getDocs(playerQuery);
-
-                if (playerQuerySnapshot.empty) {
-                    // New player, create their board
-                    let playerBoardToSave;
-
-                    if (isBoardComplete()) {
-                        // User filled out their own board
-                        playerBoardToSave = myBoard;
-                        console.log("Saving player's custom board.");
-                    } else {
-                        // User did not fill out board, create one from host
-                        console.log("Generating randomized board from host's items.");
-                        if (!gameData.hostBoard || gameData.hostBoard.length !== 25) {
-                            showModalAlert("Error: Host board is invalid. Cannot join game.");
-                            setupBoardCreationView();
-                            return;
-                        }
-                        
-                        // Get host's items, filter out free space
-                        let hostItems = gameData.hostBoard.map(square => square.text)
-                                                            .filter(text => text !== "FREE SPACE");
-                        
-                        // Shuffle and create a new 24-item list
-                        let shuffledItems = shuffle([...hostItems]);
-                        
-                        // Re-insert FREE SPACE at index 12
-                        shuffledItems.splice(12, 0, "FREE SPACE");
-
-                        // Create the board object
-                        playerBoardToSave = shuffledItems.map((item, index) => ({
-                            text: item,
-                            marked: index === 12 // Pre-mark free space
-                        }));
-                    }
-
-                    const playerDoc = await addDoc(playersRef, {
-                        userId: currentUserId,
-                        username: username,
-                        isHost: false,
-                        board: playerBoardToSave // Save the correct board
-                    });
-                    currentPlayerId = playerDoc.id;
-                    myBoard = playerBoardToSave; // Set global myBoard to what was saved
-                } else {
-                    // Returning player
-                    const playerDoc = playerQuerySnapshot.docs[0];
-                    currentPlayerId = playerDoc.id;
-                    myBoard = playerDoc.data().board; // Load their board from server
-                    console.log("Returning player, loaded board.");
-                }
-
-                setupPlayerView();
-
-            } catch (error) {
-                console.error("Error joining game:", error);
-                showModalAlert("Failed to join game. Please try again.");
-                setupBoardCreationView();
-            }
-        });
-
-        // --- Host View ---
-
-        /**
-         * Sets up the Host view.
-         * @param {string} gameCode - The game code to display.
-         */
-        function setupHostView(gameCode) {
-            currentGameState = 'HOST_GAME';
-            hostGameCode.textContent = gameCode;
-            hostUserIdDisplay.textContent = `Your User ID: ${currentUserId}`;
-            
-            // Render the host's board as the call grid
-            hostBoardGrid.innerHTML = '';
-            let calledItems = [];
-
-            myBoard.forEach((square, index) => {
-                const button = document.createElement('button');
-                button.dataset.item = square.text;
-                button.dataset.index = index;
-                button.className = "flex items-center justify-center border rounded-lg aspect-square text-xs sm:text-sm shadow-sm overflow-hidden break-words focus:outline-none focus:ring-2 focus:ring-blue-500";
-                
-                button.innerHTML = getSquareContent(square);
-
-                if (square.text === "FREE SPACE") {
-                     button.className += " bg-blue-500 text-white font-bold opacity-100"; // Pre-mark free space
-                     button.disabled = true;
-                } else {
-                     button.className += " bg-white hover:bg-blue-50 cursor-pointer";
-                }
-                
-                button.addEventListener('click', () => {
-                    if (!calledItems.includes(square.text)) {
-                        callItem(square.text);
-                    }
-                });
-                hostBoardGrid.appendChild(button);
-            });
-
-            // Listen for game state changes (called items and winner)
-            const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
-            gameListener = onSnapshot(gameRef, (docSnap) => {
-                if (!docSnap.exists()) return;
-                const gameData = docSnap.data();
-                calledItems = gameData.calledItems || [];
-
-                // Update called item button styles
-                hostBoardGrid.querySelectorAll('button').forEach(btn => {
-                    if (calledItems.includes(btn.dataset.item) && btn.dataset.item !== "FREE SPACE") {
-                        btn.classList.add('bg-gray-300', 'text-gray-500', 'line-through');
-                        btn.classList.remove('bg-white', 'hover:bg-blue-50');
-                        btn.disabled = true;
-                    }
-                });
-
-                if (gameData.winner) {
-                    showWinner(gameData.winner.username);
-                }
-            });
-
-            // Listen for players joining
-            const playersRef = collection(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players`);
-            playersListener = onSnapshot(playersRef, (querySnapshot) => {
-                hostPlayersList.innerHTML = '';
-                querySnapshot.forEach((doc) => {
-                    const player = doc.data();
-                    const li = document.createElement('li');
-                    li.textContent = `${player.username} ${player.isHost ? '(Host)' : ''}`;
-                    li.className = "bg-gray-100 p-2 rounded";
-                    hostPlayersList.appendChild(li);
-                });
-            });
-            
-            showView('host');
+            renderStudyUI();
+          }, 150);
         }
-
-        /**
-         * Host calls an item, updating Firestore.
-         * @param {string} item - The item text to call.
-         */
-        async function callItem(item) {
-            try {
-                const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
-                await updateDoc(gameRef, {
-                    calledItems: arrayUnion(item)
-                });
-            } catch (error) {
-                console.error("Error calling item:", error);
-            }
-        }
-
-        // --- Player View ---
-
-        /**
-         * Sets up the Player view with board and listeners.
-         */
-        function setupPlayerView() {
-            currentGameState = 'PLAYER_GAME';
-            playerUserIdDisplay.textContent = `Your User ID: ${currentUserId}`;
-
-            // Listen for game state changes (called items and winner)
-            const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
-            gameListener = onSnapshot(gameRef, (docSnap) => {
-                if (!docSnap.exists()) return showModalAlert("Game data error.");
-                
-                const gameData = docSnap.data();
-                const calledItems = gameData.calledItems || [];
-
-                // Update the list of called items
-                playerCalledItemsList.innerHTML = calledItems.length > 0
-                    ? calledItems.map(item => {
-                        if (isImageUrl(item)) {
-                            return `<li class="w-10 h-10 rounded-full overflow-hidden border-2 border-gray-300 bg-gray-100 flex-shrink-0"><img src="${item}" alt="Called Item" class="w-full h-full object-cover"></li>`;
-                        } else {
-                            return `<li class="px-3 py-1 bg-gray-200 rounded-full text-sm flex-shrink-0">${item}</li>`;
-                        }
-                    }).join('')
-                    : '<li class="text-gray-500">No items called yet...</li>';
-
-                renderPlayerBoard(calledItems);
-
-                if (gameData.winner) {
-                    showWinner(gameData.winner.username);
-                }
-            });
-
-            // Listen for changes to *my* board (e.g., from another device)
-            const myBoardRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players/${currentPlayerId}`);
-            myBoardListener = onSnapshot(myBoardRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    myBoard = docSnap.data().board;
-                    // We need the calledItems list to render correctly
-                    getDoc(gameRef).then(gameDoc => {
-                        const calledItems = gameDoc.data().calledItems || [];
-                        renderPlayerBoard(calledItems);
-                        checkBingo(); // Check for bingo every time board updates
-                    });
-                }
-            });
-
-            showView('player');
-        }
-
-        /**
-         * Renders the 5x5 player board.
-         * @param {Array} calledItems - The list of called items.
-         */
-        function renderPlayerBoard(calledItems) {
-            playerBoardGrid.innerHTML = '';
-            myBoard.forEach((square, index) => {
-                const div = document.createElement('div');
-                div.dataset.index = index;
-                div.innerHTML = getSquareContent(square);
-
-                let classes = "flex items-center justify-center border rounded-lg aspect-square text-xs sm:text-sm shadow-sm overflow-hidden break-words";
-                
-                // Set styling based on state
-                if (square.marked) {
-                    classes += " bg-blue-500 text-white font-bold opacity-100";
-                    if(isImageUrl(square.text)) classes += " ring-4 ring-blue-600 ring-inset";
-                } else if (calledItems.includes(square.text) || square.text === "FREE SPACE") {
-                    // Markable (called or free space)
-                    classes += " bg-white hover:bg-blue-100 cursor-pointer";
-                    if(isImageUrl(square.text)) classes += " opacity-60 hover:opacity-100";
-                } else {
-                    // Not markable
-                    classes += " bg-gray-100 text-gray-400";
-                     if(isImageUrl(square.text)) classes += " opacity-30";
-                }
-                div.className = classes;
-
-                if (!square.marked && (calledItems.includes(square.text) || square.text === "FREE SPACE")) {
-                    div.addEventListener('click', () => markSquare(index));
-                }
-
-                playerBoardGrid.appendChild(div);
-            });
-        }
-
-        /**
-         * Player marks a square on their board.
-         * @param {number} index - The index of the square to mark.
-         */
-        async function markSquare(index) {
-            if (myBoard[index].marked) return;
-            myBoard[index].marked = true;
-            
-            try {
-                const myBoardRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}/players/${currentPlayerId}`);
-                await updateDoc(myBoardRef, {
-                    board: myBoard
-                });
-            } catch (error) {
-                console.error("Error marking square:", error);
-                myBoard[index].marked = false; // Revert
-            }
-        }
-
-        /**
-         * Checks the player's board for a winning line.
-         */
-        function checkBingo() {
-            const lines = [
-                [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
-                [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
-                [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
-            ];
-
-            let hasBingo = false;
-            for (const line of lines) {
-                if (line.every(index => myBoard[index].marked)) {
-                    hasBingo = true;
-                    break;
-                }
-            }
-
-            if (hasBingo) {
-                bingoButton.classList.remove('hidden');
+        
+        function prev() {
+          isFlipped = false;
+          setTimeout(() => {
+            if (currentIndex > 0) {
+              currentIndex--;
             } else {
-                bingoButton.classList.add('hidden');
+              currentIndex = set.cards.length - 1;
             }
+            renderStudyUI();
+          }, 150);
         }
+        
+        function toggleKnown() {
+          const cardKey = set.cards[currentIndex].term;
+          if (knownCards.has(cardKey)) {
+            knownCards.delete(cardKey);
+          } else {
+            knownCards.add(cardKey);
+          }
+          
+          if (!isFlipped && knownCards.has(cardKey)) {
+            next(); // Auto-advance if marking as known
+          } else {
+            renderStudyUI();
+          }
+        }
+        
+        renderStudyUI();
+        
+      }).catch(err => {
+        console.error("Error fetching set:", err);
+        container.innerHTML = `<p class="text-red-600">Failed to load study set.</p>`;
+      });
+    }
 
-        /**
-         * Player claims BINGO!
-         */
-        bingoButton.addEventListener('click', async () => {
-            try {
-                checkBingo(); // Double-check
-                if (bingoButton.classList.contains('hidden')) return;
-
-                const gameRef = doc(db, `artifacts/${appId}/public/data/bingoGames/${currentGameId}`);
-                const gameSnap = await getDoc(gameRef);
-                if (gameSnap.data().winner) return showModalAlert("Someone just beat you to it!");
-
-                await updateDoc(gameRef, {
-                    winner: {
-                        username: currentUsername,
-                        userId: currentUserId
-                    }
-                });
-            } catch (error) {
-                console.error("Error claiming bingo:", error);
-            }
+    // --- SEARCH PAGE ---
+    function SearchPageHTML() {
+      return `
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <h1 class="text-3xl font-bold text-gray-900 mb-6">Search Public Sets</h1>
+          <div class="mb-6">
+            <input
+              type="text"
+              id="search-input"
+              class="w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Search by title or description..."
+            />
+          </div>
+          <div id="search-results">
+            <p>Loading public sets...</p>
+          </div>
+        </div>
+      `;
+    }
+    
+    function attachSearchListeners() {
+      const resultsEl = document.getElementById('search-results');
+      const searchInput = document.getElementById('search-input');
+      let allPublicSets = [];
+      
+      const setsCollection = collection(db, "studySets");
+      const q = query(setsCollection, where("isPublic", "==", true));
+      
+      currentUnsubscribe = onSnapshot(q, (querySnapshot) => {
+        allPublicSets = [];
+        querySnapshot.forEach((doc) => {
+          allPublicSets.push({ id: doc.id, ...doc.data() });
         });
-
-        // --- Win & Reset ---
-
-        /**
-         * Shows the full-screen winner modal.
-         * @param {string} username - The winner's username.
-         */
-        function showWinner(username) {
-            if (gameListener) gameListener();
-            if (playersListener) playersListener();
-            if (myBoardListener) myBoardListener();
-            gameListener = playersListener = myBoardListener = null;
-
-            winModalText.textContent = `${username} got a BINGO!`;
-            winModal.classList.remove('hidden');
-            winModal.classList.add('animate-flash');
-        }
-
-        /**
-         * Resets the game by reloading the page.
-         */
-        newGameButton.addEventListener('click', () => {
-            window.location.reload();
-        });
-
-        // --- Start App ---
-        initApp();
-
-    </script>
-
-    <style>
-        body {
-            font-family: 'Inter', sans-serif;
-        }
-        /* Winner modal flashing animation */
-        @keyframes flash {
-            0%, 100% { background-color: rgba(16, 185, 129, 0.9); } /* emerald-500 */
-            50% { background-color: rgba(255, 255, 255, 0.9); }
-        }
-        .animate-flash {
-            animation: flash 1s infinite;
-        }
-    </style>
-</head>
-<body class="bg-gray-100 min-h-screen">
-
-    <!-- Top Navigation Bar -->
-    <nav class="bg-white shadow-md sticky top-0 z-30">
-        <div class="container mx-auto max-w-4xl p-4 flex justify-between items-center">
-            <h1 class="text-2xl font-bold text-blue-600">Firebase Bingo</h1>
-            <div class="flex space-x-2">
-                <button id="create-game-btn" class="bg-emerald-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors text-sm">
-                    Create Game
-                </button>
-                <button id="join-game-btn" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors text-sm">
-                    Join Game
-                </button>
-            </div>
-        </div>
-    </nav>
-
-    <div class="container mx-auto p-4 max-w-4xl">
-
-        <!-- Loading View -->
-        <div id="loading-view" class="text-center p-10">
-            <p class="text-2xl font-semibold text-gray-700">Connecting...</p>
-        </div>
-
-        <!-- Board Creation View -->
-        <div id="board-creation-view" class="hidden space-y-6">
-            <div class="bg-white p-6 rounded-lg shadow-lg">
-                <div class="flex flex-wrap justify-between items-center mb-4 gap-2">
-                    <h2 class="text-2xl font-bold text-gray-800">1. Create Your Board</h2>
-                    <div class="flex flex-col items-end">
-                        <input type="file" id="upload-bingo-image" class="hidden" accept="image/*">
-                        <button id="scan-board-btn" class="bg-purple-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition-colors text-sm">
-                            Scan Board from Image
-                        </button>
-                        <p id="scan-loading" class="text-sm text-gray-500 hidden animate-pulse">Scanning, please wait...</p>
-                    </div>
-                </div>
-                <p class="text-gray-600 mb-4">Click any square to add text/images. Or, use the "Scan Board" button. You must fill all 24 squares to host. You can join a game with a blank board to get a random one.</p>
-                <div id="board-creation-grid" class="grid grid-cols-5 gap-2 border-4 border-gray-300 p-2 rounded-lg bg-gray-50">
-                    <!-- Board creation grid generated here -->
-                </div>
-            </div>
-            <div class="text-center">
-                 <h2 class="text-2xl font-bold text-gray-800 mb-4">2. Start Playing!</h2>
-                 <p class="text-gray-600 mb-4">Once your board is full, use the buttons at the top of the page to create or join a game.</p>
-            </div>
-        </div>
-
-        <!-- Host View -->
-        <div id="host-view" class="hidden space-y-6">
-            <div class="bg-white p-6 rounded-lg shadow-lg text-center">
-                <h2 class="text-2xl font-bold text-gray-800">Your Game is Live!</h2>
-                <p class="text-lg text-gray-600 mt-2">Share this code with your players:</p>
-                <div class="my-4 p-4 bg-gray-100 border-dashed border-2 border-gray-300 rounded-lg">
-                    <span id="host-game-code" class="text-5xl font-bold text-blue-600 tracking-widest"></span>
-                </div>
-                <p id="host-user-id" class="text-xs text-gray-500"></p>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <!-- Call Items Grid -->
-                <div class="md:col-span-2 bg-white p-6 rounded-lg shadow-lg">
-                    <h3 class="text-xl font-semibold mb-4">Your Board (Click to Call Items)</h3>
-                    <div id="host-board-grid" class="grid grid-cols-5 gap-2">
-                        <!-- Host board will be generated here -->
-                    </div>
-                </div>
-                <!-- Players List -->
-                <div class="md:col-span-1 bg-white p-6 rounded-lg shadow-lg">
-                    <h3 class="text-xl font-semibold mb-4">Players Joined</h3>
-                    <ul id="host-players-list" class="space-y-2">
-                        <!-- Player list will be generated here -->
-                    </ul>
-                </div>
-            </div>
-        </div>
-
-        <!-- Player View -->
-        <div id="player-view" class="hidden space-y-6">
-            <div class="bg-white p-6 rounded-lg shadow-lg">
-                <div class="flex justify-between items-center mb-4">
-                    <h2 class="text-2xl font-bold text-gray-800">Your Bingo Board</h2>
-                    <button id="bingo-button" class="hidden bg-red-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg animate-pulse hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2">
-                        BINGO!
-                    </button>
-                </div>
-                <p id="player-user-id" class="text-xs text-gray-500 mb-4"></p>
-                <div id="player-board-grid" class="grid grid-cols-5 gap-2 border-4 border-blue-300 p-2 rounded-lg bg-blue-50">
-                    <!-- Player board will be generated here -->
-                </div>
+        renderSearchResults(allPublicSets, '');
+      }, (err) => {
+        console.error("Error fetching public sets:", err);
+        resultsEl.innerHTML = `<p class="text-red-600">Failed to load public sets.</p>`;
+      });
+      
+      searchInput.addEventListener('input', (e) => {
+        renderSearchResults(allPublicSets, e.target.value);
+      });
+    }
+    
+    function renderSearchResults(sets, searchTerm) {
+      const resultsEl = document.getElementById('search-results');
+      const lowerSearchTerm = searchTerm.toLowerCase();
+      
+      const filteredSets = sets.filter(set => 
+        set.title.toLowerCase().includes(lowerSearchTerm) ||
+        (set.description && set.description.toLowerCase().includes(lowerSearchTerm))
+      );
+      
+      if (filteredSets.length === 0) {
+        resultsEl.innerHTML = `<p class="text-gray-600">${searchTerm ? 'No sets found matching your search.' : 'No public sets available.'}</p>`;
+        return;
+      }
+      
+      let setsHTML = '<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">';
+      filteredSets.forEach(set => {
+        setsHTML += SetCardHTML(set.id, set, true); // true for isPublicSearch
+      });
+      setsHTML += '</div>';
+      resultsEl.innerHTML = setsHTML;
+      
+      attachSetCardListeners();
+    }
+    
+    // --- UPLOAD PAGE (CLIENT-SIDE AI) ---
+    function UploadPageHTML() {
+      return `
+        <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div class="bg-white p-8 rounded-lg shadow-xl text-center">
+            ${IconAI}
+            <h1 class="text-3xl font-bold text-gray-900 mt-4 mb-4">Import & Auto-Create</h1>
+            <p class="text-lg text-gray-600 mb-8">
+              Upload a <code>.pdf</code> or <code>.txt</code> file and our AI will
+              automatically create flashcards for you.
+            </p>
+            <div class="p-6 border-2 border-dashed border-gray-300 rounded-lg">
+              <label 
+                for="file-upload" 
+                class="cursor-pointer inline-flex items-center px-6 py-3 bg-white border border-gray-300 rounded-md shadow-sm text-base font-medium text-gray-700 hover:bg-gray-50"
+              >
+                ${IconUpload}
+                <span id="file-name-label" class="ml-2">Select a file</span>
+              </label>
+              <input id="file-upload" name="file-upload" type="file" class="sr-only" accept=".pdf,.txt,.md" />
             </div>
             
-            <div class="bg-white p-6 rounded-lg shadow-lg">
-                <h3 class="text-xl font-semibold mb-4">Called Items</h3>
-                <ul id="player-called-items-list" class="flex flex-wrap gap-2 items-center">
-                    <!-- Called items will be listed here -->
-                </ul>
+            <!-- This is a spinner, not a progress bar, as processing time is unknown -->
+            <div id="loading-spinner" class="hidden w-full flex justify-center items-center mt-4">
+              <div class="w-8 h-8 border-4 border-blue-500 rounded-full animate-spin loader"></div>
             </div>
+            
+            <button
+              id="upload-button"
+              disabled
+              class="w-full mt-8 px-6 py-3 text-base font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+            >
+              Generate Cards
+            </button>
+            
+            <p id="upload-message" class="mt-4 text-sm"></p>
+            
+            <!-- REMOVED 'How it works' section -->
+
+          </div>
         </div>
+      `;
+    }
+    
+    /**
+     * NEW: Helper function to parse file content
+     */
+    async function parseFileContent(file) {
+      if (file.type === 'application/pdf') {
+        // --- PDF Parsing ---
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.readAsArrayBuffer(file);
+          reader.onload = () => {
+            const loadingTask = pdfjsLib.getDocument(reader.result);
+            loadingTask.promise.then(async (pdf) => {
+              let allText = '';
+              for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                allText += textContent.items.map(item => item.str).join(' ');
+              }
+              resolve(allText);
+            }).catch(reject);
+          };
+          reader.onerror = reject;
+        });
+      } else {
+        // --- Text File Parsing ---
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.readAsText(file);
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+        });
+      }
+    }
+    
+    /**
+     * NEW: Helper function to call Gemini API
+     */
+    async function callGeminiAPI(extractedText) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+      
+      const prompt = `
+        You are an expert study assistant.
+        Analyze the following text and extract the most important key terms and their definitions.
+        Return your answer as a valid JSON array of objects, where each object has a "term" and "definition" key.
+        
+        Example: [{"term": "Mitochondria", "definition": "The powerhouse of the cell."}]
+        
+        If you cannot find any good terms, return an empty array [].
+        Do not return more than 50 cards.
+        
+        Text to analyze:
+        ---
+        ${extractedText.substring(0, 100000)}
+        ---
+      `;
+      
+      const payload = {
+        contents: [{ parts: [{ text: prompt }] }],
+      };
 
-        <!-- === MODALS === -->
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Google AI API error! Status: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      const candidate = result.candidates?.[0];
+      
+      if (!candidate || !candidate.content?.parts?.[0]?.text) {
+        throw new Error('Invalid response from AI.');
+      }
+      
+      let jsonText = candidate.content.parts[0].text;
+      jsonText = jsonText.trim().replace(/^```json|```$/g, ""); // Clean markdown
+      
+      const cards = JSON.parse(jsonText);
+      return cards;
+    }
 
-        <!-- Win Modal Overlay -->
-        <div id="win-modal" class="dialog hidden" aria-modal="true">
-            <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
-            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <div class="relative w-full max-w-md p-8 bg-white rounded-lg shadow-2xl text-center">
-                    <h2 id="win-modal-text" class="text-4xl font-bold text-gray-900 mb-6"></h2>
-                    <button id="new-game-button" class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
-                        Play Again
-                    </button>
+    function attachUploadListeners() {
+      const fileInput = document.getElementById('file-upload');
+      const uploadButton = document.getElementById('upload-button');
+      const fileNameLabel = document.getElementById('file-name-label');
+      const messageEl = document.getElementById('upload-message');
+      const loadingSpinner = document.getElementById('loading-spinner');
+      
+      let selectedFile = null;
+
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files[0]) {
+          selectedFile = e.target.files[0];
+          // Simple validation
+          if (selectedFile.type !== 'application/pdf' && !selectedFile.type.startsWith('text/')) {
+            messageEl.textContent = 'Invalid file type. Please select a .pdf or .txt file.';
+            messageEl.className = 'mt-4 text-sm text-red-600';
+            selectedFile = null;
+            uploadButton.disabled = true;
+            return;
+          }
+          fileNameLabel.textContent = selectedFile.name;
+          uploadButton.disabled = false;
+          messageEl.textContent = '';
+        }
+      });
+
+      uploadButton.addEventListener('click', async () => {
+        if (!selectedFile) {
+          messageEl.textContent = 'Please select a file first.';
+          messageEl.className = 'mt-4 text-sm text-red-600';
+          return;
+        }
+        if (!currentUser) {
+          messageEl.textContent = 'You must be logged in to upload.';
+          messageEl.className = 'mt-4 text-sm text-red-600';
+          return;
+        }
+        
+        uploadButton.disabled = true;
+        uploadButton.textContent = 'Processing...';
+        loadingSpinner.classList.remove('hidden');
+        messageEl.textContent = 'Reading file and contacting AI... This may take a moment.';
+        messageEl.className = 'mt-4 text-sm text-blue-600';
+
+        try {
+          // 1. Parse file content (PDF or TXT)
+          const text = await parseFileContent(selectedFile);
+          
+          if (text.length < 50) {
+            throw new Error('Not enough text in the file to process.');
+          }
+          
+          messageEl.textContent = 'File read. Asking AI to generate cards...';
+
+          // 2. Call Gemini API with the text
+          const cards = await callGeminiAPI(text);
+          
+          if (cards.length === 0) {
+            throw new Error('The AI could not find any flashcards in that text.');
+          }
+          
+          messageEl.textContent = `Found ${cards.length} cards. Saving to your account...`;
+
+          // 3. Save the new set to Firestore
+          const newSet = {
+            title: `AI Set: ${selectedFile.name}`,
+            description: `Generated from file: ${selectedFile.name}`,
+            ownerId: currentUser.uid,
+            ownerEmail: currentUser.email,
+            isPublic: false, // Default to private
+            cards: cards,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          };
+          
+          await addDoc(collection(db, "studySets"), newSet);
+          
+          // 4. Success!
+          messageEl.textContent = `Success! New set created. Navigating to dashboard...`;
+          messageEl.className = 'mt-4 text-sm text-green-600';
+          setTimeout(() => {
+              navigate('dashboard');
+          }, 2000);
+
+        } catch (error) {
+          console.error("AI generation failed:", error);
+          messageEl.textContent = 'Failed to generate cards: ' + error.message;
+          messageEl.className = 'mt-4 text-sm text-red-600';
+          uploadButton.disabled = false;
+          uploadButton.textContent = 'Generate Cards';
+          loadingSpinner.classList.add('hidden');
+        }
+      });
+    }
+
+    // --- NEW: QUIZ PAGE ---
+    
+    /**
+     * Utility function to shuffle an array
+     */
+    function shuffleArray(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+      return array;
+    }
+    
+    function QuizPageHTML() {
+      // Just a loader, content will be filled by fetchQuizSet
+      return `
+        <div id="quiz-page-container" class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <p>Loading quiz...</p>
+        </div>
+      `;
+    }
+    
+    function fetchQuizSet() {
+      const container = document.getElementById('quiz-page-container');
+      
+      getDoc(doc(db, "studySets", currentSetId)).then(docSnap => {
+        if (!docSnap.exists()) {
+          container.innerHTML = `<p class="text-red-600">Quiz set not found.</p>`;
+          return;
+        }
+        
+        const set = docSnap.data();
+        if (!set.cards || set.cards.length < 4) {
+            container.innerHTML = `<p class="text-red-600">This set needs at least 4 cards for a quiz.</p>`;
+            return;
+        }
+        
+        let quizQuestions = shuffleArray([...set.cards]);
+        let currentIndex = 0;
+        let score = 0;
+        let answered = false;
+        
+        function renderQuizUI() {
+          const currentCard = quizQuestions[currentIndex];
+          const progressPercent = ((currentIndex + 1) / quizQuestions.length) * 100;
+          
+          // --- Generate Options ---
+          const correctAnswer = currentCard.definition;
+          // Get all *other* definitions
+          const incorrectOptions = quizQuestions
+            .filter(card => card.term !== currentCard.term)
+            .map(card => card.definition);
+          
+          // Shuffle and pick 3 incorrect options
+          const finalIncorrectOptions = shuffleArray(incorrectOptions).slice(0, 3);
+          
+          // Combine and shuffle final options
+          const options = shuffleArray([correctAnswer, ...finalIncorrectOptions]);
+          
+          // --- Render HTML ---
+          container.innerHTML = `
+            <button data-page="dashboard" class="nav-button flex items-center text-blue-600 hover:underline mb-4">
+              ${IconBack} <span class="ml-1">Back to Dashboard</span>
+            </button>
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">${set.title} - Quiz</h1>
+            <p class="text-lg text-gray-600 mb-2">Question ${currentIndex + 1} / ${quizQuestions.length}</p>
+            <p class="text-lg text-blue-600 font-semibold mb-6">Score: ${score}</p>
+
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-6">
+              <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${progressPercent}%;"></div>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow-xl p-8 mb-6">
+              <p class="text-sm font-medium text-gray-500 mb-2">TERM:</p>
+              <h2 class="text-3xl font-semibold text-gray-900 text-center">${currentCard.term}</h2>
+            </div>
+            
+            <p class="text-sm font-medium text-gray-500 mb-2">Choose the correct definition:</p>
+            <div id="options-container" class="space-y-4">
+              ${options.map((option, index) => `
+                <button
+                  class="quiz-option w-full p-4 bg-white rounded-lg shadow border border-gray-200 text-left text-gray-800 hover:bg-gray-50 transition-colors"
+                  data-answer="${option === correctAnswer ? 'correct' : 'incorrect'}"
+                >
+                  <span classclass="font-mono text-xs mr-3">${String.fromCharCode(65 + index)}.</span>
+                  ${option}
+                </button>
+              `).join('')}
+            </div>
+            
+            <button
+              id="next-quiz-button"
+              class="hidden w-full mt-8 px-6 py-3 text-base font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+            >
+              ${currentIndex === quizQuestions.length - 1 ? 'Finish Quiz' : 'Next Question'}
+            </button>
+          `;
+          
+          // --- Attach Listeners ---
+          container.querySelector('.nav-button').addEventListener('click', () => navigate('dashboard'));
+          
+          document.querySelectorAll('.quiz-option').forEach(button => {
+            button.addEventListener('click', handleAnswer);
+          });
+          
+          document.getElementById('next-quiz-button').addEventListener('click', nextQuestion);
+        }
+        
+        function handleAnswer(e) {
+          if (answered) return;
+          answered = true;
+          
+          const clickedButton = e.currentTarget;
+          const isCorrect = clickedButton.dataset.answer === 'correct';
+          
+          if (isCorrect) {
+            score++;
+            clickedButton.classList.add('correct');
+          } else {
+            clickedButton.classList.add('incorrect');
+            // Also show the correct one
+            document.querySelector('[data-answer="correct"]').classList.add('correct');
+          }
+          
+          // Disable all buttons
+          document.querySelectorAll('.quiz-option').forEach(button => {
+            button.disabled = true;
+          });
+          
+          // Show 'Next' button
+          document.getElementById('next-quiz-button').classList.remove('hidden');
+        }
+        
+        function nextQuestion() {
+          answered = false;
+          if (currentIndex < quizQuestions.length - 1) {
+            currentIndex++;
+            renderQuizUI();
+          } else {
+            showQuizCompletionModal();
+          }
+        }
+        
+        function showQuizCompletionModal() {
+            const finalScore = (score / quizQuestions.length) * 100;
+            container.innerHTML = `
+              <div class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                <div class="bg-white p-8 rounded-lg shadow-xl max-w-md w-full text-center">
+                  <h3 class="text-2xl font-bold text-gray-900">Quiz Complete!</h3>
+                  <p class="mt-4 text-4xl font-bold text-blue-600">${finalScore.toFixed(0)}%</p>
+                  <p class="mt-2 text-lg text-gray-600">You got ${score} out of ${quizQuestions.length} correct.</p>
+                  <div class="mt-8 flex flex-col sm:flex-row justify-center gap-4">
+                    <button id="restart-button" class="px-6 py-3 bg-blue-600 border rounded-md text-base font-medium text-white hover:bg-blue-700">Take Quiz Again</button>
+                    <button id="dashboard-button" class="px-6 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50">Back to Dashboard</button>
+                  </div>
                 </div>
-            </div>
-        </div>
+              </div>
+            `;
+            
+            // Trigger confetti!
+            if (typeof confetti === 'function') {
+              confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 } });
+            }
+            
+            document.getElementById('restart-button').addEventListener('click', () => {
+                quizQuestions = shuffleArray([...set.cards]);
+                currentIndex = 0;
+                score = 0;
+                answered = false;
+                renderQuizUI();
+            });
+            document.getElementById('dashboard-button').addEventListener('click', () => navigate('dashboard'));
+        }
+        
+        // Start the quiz
+        renderQuizUI();
+        
+      }).catch(err => {
+        console.error("Error fetching set:", err);
+        container.innerHTML = `<p class="text-red-600">Failed to load quiz.</p>`;
+      });
+    }
 
-        <!-- Edit Square Modal -->
-        <div id="edit-square-modal" class="dialog hidden" aria-modal="true">
-            <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
-            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <form id="edit-square-form" class="relative w-full max-w-md p-6 bg-white rounded-lg shadow-2xl">
-                    <h2 class="text-xl font-bold text-gray-900 mb-4">Edit Square</h2>
-                    <div class="mb-4">
-                        <label for="edit-square-input" class="block text-sm font-medium text-gray-700 mb-1">Text or Image URL</label>
-                        <input type="text" id="edit-square-input" name="square-content" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 'Team Meeting' or 'http://...' " required>
-                    </div>
-                    <div class="flex gap-4">
-                        <button type="button" id="cancel-edit-square-btn" class="w-1/2 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors">
-                            Cancel
-                        </button>
-                        <button type="submit" class="w-1/2 bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
-                            Save
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
+    // --- APP ENTRY POINT ---
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        currentUser = user;
+        if (currentPage === 'auth') {
+          navigate('dashboard');
+        } else {
+          render(); // Re-render in case we were on a page that needs user data
+        }
+      } else {
+        currentUser = null;
+        navigate('auth');
+      }
+    });
 
-        <!-- Join Game Modal -->
-        <div id="join-game-modal" class="dialog hidden" aria-modal="true">
-            <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
-            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <form id="join-game-form" class="relative w-full max-w-md p-6 bg-white rounded-lg shadow-2xl">
-                    <h2 class="text-xl font-bold text-gray-900 mb-4">Join Game</h2>
-                    <div class="mb-4">
-                        <label for="join-code" class="block text-sm font-medium text-gray-700 mb-1">Game Code</label>
-                        <input type="text" id="join-code" name="join-code" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="ABC123" required>
-                    </div>
-                    <div class="mb-4">
-                        <label for="join-username" class="block text-sm font-medium text-gray-700 mb-1">Your Username</label>
-                        <input type="text" id="join-username" name="join-username" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Player1" required>
-                    </div>
-                    <div class="flex gap-4">
-                        <button type="button" id="cancel-join-game-btn" class="w-1/2 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors">
-                            Cancel
-                        </button>
-                        <button type="submit" class="w-1/2 bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
-                            Join
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        <!-- Create Game Modal -->
-        <div id="create-game-modal" class="dialog hidden" aria-modal="true">
-            <div class="fixed inset-0 z-40 bg-black bg-opacity-50"></div>
-            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <form id="create-game-form" class="relative w-full max-w-md p-6 bg-white rounded-lg shadow-2xl">
-                    <h2 class="text-xl font-bold text-gray-900 mb-4">Create Game</h2>
-                    <div class="mb-4">
-                        <label for="host-username" class="block text-sm font-medium text-gray-700 mb-1">Your Host Username</label>
-                        <input type="text" id="host-username" name="host-username" class="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="BingoMaster" required>
-                    </div>
-                    <div class="flex gap-4">
-                        <button type="button" id="cancel-create-game-btn" class="w-1/2 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors">
-                            Cancel
-                        </button>
-                        <button type="submit" class="w-1/2 bg-emerald-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors">
-                            Create
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-    </div>
+  </script>
 </body>
 </html>
-
-
